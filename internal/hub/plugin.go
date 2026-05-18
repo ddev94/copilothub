@@ -172,6 +172,10 @@ func (f *ExternalFeature) RegisterRoutes(mux *http.ServeMux) {
 	})
 }
 
+func (f *ExternalFeature) FrontendHandler() http.Handler {
+	return f.proxy
+}
+
 func (f *ExternalFeature) Stop() {
 	f.mu.Lock()
 	defer f.mu.Unlock()

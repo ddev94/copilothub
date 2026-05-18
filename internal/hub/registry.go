@@ -23,6 +23,12 @@ func (r *Registry) RegisterRoutes(mux *http.ServeMux, ctx FeatureContext) {
 		f.RegisterRoutes(sub)
 		prefix := "/api/features/" + f.ID()
 		mux.Handle(prefix+"/", http.StripPrefix(prefix, sub))
+
+		// External features also serve a frontend UI
+		if ef, ok := f.(*ExternalFeature); ok {
+			frontendPrefix := "/features/" + f.ID()
+			mux.Handle(frontendPrefix+"/", http.StripPrefix(frontendPrefix, ef.FrontendHandler()))
+		}
 	}
 }
 
