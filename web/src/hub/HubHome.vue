@@ -56,6 +56,9 @@ function open(feature: FeatureManifest) {
             <span class="text-xs text-muted-foreground font-medium">
               {{ repoStore.info.name }}
             </span>
+            <span class="text-xs text-muted-foreground/60 font-mono" :title="repoStore.info.path">
+              {{ repoStore.info.path }}
+            </span>
             <span v-if="repoStore.info.currentBranch"
               class="inline-flex items-center gap-1 text-xs bg-muted px-2 py-0.5 rounded-full text-foreground">
               <svg class="w-3 h-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
