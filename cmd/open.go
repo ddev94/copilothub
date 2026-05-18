@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"copilothub/internal/server"
 	"time"
@@ -27,6 +28,11 @@ func newOpenCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
+			}
+			var err error
+			repoPath, err = filepath.Abs(repoPath)
+			if err != nil {
+				return err
 			}
 			url := fmt.Sprintf("http://localhost:%d", port)
 			fmt.Printf("spec-designer running at %s\n", url)
