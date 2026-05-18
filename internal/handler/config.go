@@ -3,7 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"spec-designer/internal/config"
+	"aikit/internal/config"
 )
 
 type ConfigHandler struct {

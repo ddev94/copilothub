@@ -2,7 +2,7 @@ package server
 
 import (
 	"net/http"
-	"spec-designer/internal/ui"
+	"aikit/internal/ui"
 )
 
 func frontendHandler() http.Handler {

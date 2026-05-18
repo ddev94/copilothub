@@ -2,10 +2,10 @@
 import { onMounted, ref, computed } from "vue";
 import { useSpecStore } from "@/stores/spec";
 import { useRepoStore } from "@/stores/repo";
-import DocList from "@/components/DocList.vue";
-import SectionEditor from "@/components/SectionEditor.vue";
-import AIPanel from "@/components/AIPanel.vue";
-import WelcomeScreen from "@/components/WelcomeScreen.vue";
+import DocList from "./DocList.vue";
+import SectionEditor from "./SectionEditor.vue";
+import AIPanel from "./AIPanel.vue";
+import WelcomeScreen from "./WelcomeScreen.vue";
 import { Button } from "@/components/ui/button";
 
 const specStore = useSpecStore();
@@ -97,9 +97,6 @@ const saveLabel = computed(() => {
           <Button variant="outline" size="sm" @click="exportMarkdown"
             >Export ↓</Button
           >
-          <Button as-child size="sm">
-            <RouterLink to="/preview">Preview</RouterLink>
-          </Button>
         </div>
       </div>
 

@@ -2,7 +2,7 @@ package handler
 
 import (
 	"net/http"
-	"spec-designer/internal/repo"
+	"aikit/internal/repo"
 )
 
 type RepoHandler struct {

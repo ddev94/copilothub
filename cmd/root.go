@@ -3,15 +3,15 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"spec-designer/pkg/version"
+	"aikit/pkg/version"
 
 	"github.com/spf13/cobra"
 )
 
 func Execute() {
 	root := &cobra.Command{
-		Use:     "spec-designer",
-		Short:   "AI-powered SRS designer for your repository",
+		Use:     "aikit",
+		Short:   "AI Hub — extensible AI-powered developer tools",
 		Version: version.Version,
 	}
 	registerCommands(root)

@@ -1,12 +1,14 @@
 package server
 
 import (
+	"aikit/internal/ai"
+	"aikit/internal/config"
+	"aikit/internal/features/specdesigner"
+	"aikit/internal/handler"
+	"aikit/internal/hub"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"spec-designer/internal/ai"
-	"spec-designer/internal/config"
-	"spec-designer/internal/handler"
 )
 
 func setupRoutes(mux *http.ServeMux, repoPath string) {
@@ -17,23 +19,30 @@ func setupRoutes(mux *http.ServeMux, repoPath string) {
 
 	aiProvider := ai.NewSDKProvider(cfg.AI.Token, cfg.AI.Model, repoPath)
 
+	// Build registry with built-in features
+	registry := hub.NewRegistry()
+	registry.Register(specdesigner.New())
+
+	// Load and register external plugins
+	pluginReg, _ := hub.LoadPluginRegistry()
+	for _, p := range pluginReg.Plugins {
+		registry.Register(hub.NewExternalFeature(p))
+	}
+
+	// Mount all feature routes under /api/features/{id}/
+	registry.RegisterRoutes(mux, hub.FeatureContext{
+		WorkDir:    repoPath,
+		AIProvider: aiProvider,
+		Config:     cfgStore,
+	})
+
+	// Hub-level routes
+	hubH := handler.NewHubHandler(registry)
 	repoH := handler.NewRepoHandler(repoPath)
-	specH := handler.NewSpecHandler(repoPath)
-	aiH := handler.NewAIHandler(aiProvider, repoPath)
 	cfgH := handler.NewConfigHandler(repoPath)
 
+	mux.HandleFunc("GET /api/hub/features", hubH.ListFeatures)
 	mux.HandleFunc("GET /api/repo", repoH.Info)
-
-	// Multi-spec CRUD
-	mux.HandleFunc("GET /api/specs", specH.List)
-	mux.HandleFunc("POST /api/specs", specH.Create)
-	mux.HandleFunc("GET /api/spec/{id}", specH.Get)
-	mux.HandleFunc("PUT /api/spec/{id}", specH.Save)
-	mux.HandleFunc("DELETE /api/spec/{id}", specH.Delete)
-
-	mux.HandleFunc("POST /api/ai/suggest", aiH.Suggest)
-	mux.HandleFunc("POST /api/ai/clarify", aiH.Clarify)
-	mux.HandleFunc("POST /api/ai/generate-spec", aiH.GenerateSpec)
 	mux.HandleFunc("GET /api/config", cfgH.Get)
 	mux.HandleFunc("PUT /api/config", cfgH.Save)
 

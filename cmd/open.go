@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"spec-designer/internal/server"
+	"aikit/internal/server"
 	"time"
 
 	"github.com/spf13/cobra"

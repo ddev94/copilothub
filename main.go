@@ -1,6 +1,6 @@
 package main
 
-import "spec-designer/cmd"
+import "aikit/cmd"
 
 func main() {
 	cmd.Execute()

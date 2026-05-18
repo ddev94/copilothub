@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import { useRouter } from 'vue-router'
 import { useSpecStore } from '@/stores/spec'
 import { useRepoStore } from '@/stores/repo'
 import { Button } from '@/components/ui/button'
-import ConfigDialog from '@/components/ConfigDialog.vue'
+import ConfigDialog from './ConfigDialog.vue'
 
 const emit = defineEmits<{ newDoc: [] }>()
 
+const router = useRouter()
 const specStore = useSpecStore()
 const repoStore = useRepoStore()
 
@@ -25,11 +27,17 @@ function formatDate(d: string) {
     <!-- Header -->
     <div class="px-4 py-3 border-b border-border">
       <div class="flex items-center justify-between mb-0.5">
-        <span class="text-sm font-bold tracking-tight">spec-designer</span>
+        <button
+          class="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          @click="router.push('/')"
+        >
+          ← Hub
+        </button>
         <Button variant="ghost" size="icon-sm" class="h-6 w-6 text-base" title="New SRD" @click="emit('newDoc')">
           +
         </Button>
       </div>
+      <p class="text-sm font-bold tracking-tight mt-1">Spec Designer</p>
       <p v-if="repoStore.info" class="text-xs text-muted-foreground truncate">
         {{ repoStore.info.name }}
       </p>

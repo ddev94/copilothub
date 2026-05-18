@@ -73,3 +73,15 @@ export interface ClarifyResponse {
   clear: boolean;
   questions: ClarifyQuestion[];
 }
+
+export interface FeatureManifest {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  icon: string;
+  category: string;
+  author: string;
+  type: "builtin" | "external";
+  frontendRoute: string;
+}

@@ -1,4 +1,4 @@
-module spec-designer
+module aikit
 
 go 1.24
 

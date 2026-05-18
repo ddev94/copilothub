@@ -1,18 +1,94 @@
-package handler
+package specdesigner
 
 import (
+	"aikit/internal/ai"
+	"aikit/internal/features/specdesigner/spec"
+	"aikit/internal/repo"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"spec-designer/internal/ai"
-	"spec-designer/internal/repo"
-	"spec-designer/internal/spec"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
 
+// SpecHandler handles spec CRUD operations.
+type SpecHandler struct {
+	store *spec.Store
+}
+
+func NewSpecHandler(repoPath string) *SpecHandler {
+	return &SpecHandler{store: spec.NewStore(repoPath)}
+}
+
+func (h *SpecHandler) List(w http.ResponseWriter, r *http.Request) {
+	metas, err := h.store.List()
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, metas)
+}
+
+func (h *SpecHandler) Get(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s, err := h.store.Load(id)
+	if os.IsNotExist(err) {
+		writeError(w, "spec not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, s)
+}
+
+func (h *SpecHandler) Save(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var s spec.Spec
+	if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.ID = id
+	if err := h.store.Save(&s); err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, s)
+}
+
+func (h *SpecHandler) Create(w http.ResponseWriter, r *http.Request) {
+	// Accept an optional full Spec body (e.g. AI-generated); otherwise create blank.
+	var s spec.Spec
+	if err := json.NewDecoder(r.Body).Decode(&s); err != nil || s.ID == "" {
+		blank := h.store.NewDefault()
+		if s.Title != "" {
+			blank.Title = s.Title
+		}
+		s = *blank
+	}
+	if err := h.store.Save(&s); err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, s)
+}
+
+func (h *SpecHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := h.store.Delete(id); err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// AIHandler handles AI-powered operations.
 type AIHandler struct {
 	provider ai.Provider
 	scanner  *repo.Scanner
@@ -53,7 +129,7 @@ Rules:
 - Output ONLY the JSON, no markdown fences, no explanation.
 - Language is Vietnamese. Use Vietnamese for all generated content.`
 
-// Suggest improves or generates content for a single section.
+// suggestReq improves or generates content for a single section.
 type suggestReq struct {
 	Requirement string `json:"requirement"`
 	Context     string `json:"context"`
@@ -162,7 +238,7 @@ func (h *AIHandler) Clarify(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// GenerateSpec creates user stories from a requirement description.
+// generateSpecReq creates user stories from a requirement description.
 type generateSpecReq struct {
 	Title         string `json:"title"`
 	Requirement   string `json:"requirement"`
@@ -287,4 +363,18 @@ func buildGeneratePrompt(req generateSpecReq, info *repo.Info) string {
 	}
 	fmt.Fprintf(&b, "\nGenerate comprehensive user stories with acceptance criteria and test cases for this requirement.")
 	return b.String()
+}
+
+// JSON helpers
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func writeError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg}) //nolint:errcheck
 }

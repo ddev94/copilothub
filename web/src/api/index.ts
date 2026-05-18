@@ -5,6 +5,7 @@ import type {
   Config,
   AuthStatus,
   ClarifyResponse,
+  FeatureManifest,
 } from "@/types";
 
 const BASE = "/api";
@@ -21,36 +22,43 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+const SPEC_DESIGNER = "/features/spec-designer";
+
 export const api = {
+  hub: {
+    features: () => request<{ features: FeatureManifest[] }>("/hub/features"),
+  },
   repo: {
     info: () => request<RepoInfo>("/repo"),
   },
   specs: {
-    list: () => request<SpecMeta[]>("/specs"),
+    list: () => request<SpecMeta[]>(`${SPEC_DESIGNER}/specs`),
     create: (data?: Partial<Spec>) =>
-      request<Spec>("/specs", {
+      request<Spec>(`${SPEC_DESIGNER}/specs`, {
         method: "POST",
         body: JSON.stringify(data ?? {}),
       }),
   },
   spec: {
-    get: (id: string) => request<Spec>(`/spec/${id}`),
+    get: (id: string) => request<Spec>(`${SPEC_DESIGNER}/spec/${id}`),
     save: (spec: Spec) =>
-      request<Spec>(`/spec/${spec.id}`, {
+      request<Spec>(`${SPEC_DESIGNER}/spec/${spec.id}`, {
         method: "PUT",
         body: JSON.stringify(spec),
       }),
     delete: (id: string) =>
-      request<{ ok: boolean }>(`/spec/${id}`, { method: "DELETE" }),
+      request<{ ok: boolean }>(`${SPEC_DESIGNER}/spec/${id}`, {
+        method: "DELETE",
+      }),
   },
   ai: {
     suggest: (requirement: string, context: string) =>
-      request<{ content: string }>("/ai/suggest", {
+      request<{ content: string }>(`${SPEC_DESIGNER}/ai/suggest`, {
         method: "POST",
         body: JSON.stringify({ requirement, context }),
       }),
     clarify: (requirement: string) =>
-      request<ClarifyResponse>("/ai/clarify", {
+      request<ClarifyResponse>(`${SPEC_DESIGNER}/ai/clarify`, {
         method: "POST",
         body: JSON.stringify({ requirement }),
       }),
@@ -59,7 +67,7 @@ export const api = {
       requirement: string;
       clarification?: string;
     }) =>
-      request<Spec>("/ai/generate-spec", {
+      request<Spec>(`${SPEC_DESIGNER}/ai/generate-spec`, {
         method: "POST",
         body: JSON.stringify(payload),
       }),
