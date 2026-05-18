@@ -45,6 +45,8 @@ export interface FileNode {
 export interface RepoInfo {
   name: string;
   path: string;
+  remoteOrigin: string;
+  currentBranch: string;
   techStack: string[];
   fileTree: FileNode[];
 }

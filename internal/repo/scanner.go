@@ -2,15 +2,18 @@ package repo
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
 type Info struct {
-	Name      string   `json:"name"`
-	Path      string   `json:"path"`
-	TechStack []string `json:"techStack"`
-	FileTree  []Node   `json:"fileTree"`
+	Name         string   `json:"name"`
+	Path         string   `json:"path"`
+	RemoteOrigin string   `json:"remoteOrigin"`
+	CurrentBranch string  `json:"currentBranch"`
+	TechStack    []string `json:"techStack"`
+	FileTree     []Node   `json:"fileTree"`
 }
 
 type Node struct {
@@ -34,10 +37,12 @@ func (s *Scanner) Scan() (*Info, error) {
 		return nil, err
 	}
 	return &Info{
-		Name:      filepath.Base(s.root),
-		Path:      s.root,
-		TechStack: s.detectStack(),
-		FileTree:  tree,
+		Name:          filepath.Base(s.root),
+		Path:          s.root,
+		RemoteOrigin:  s.gitRemoteOrigin(),
+		CurrentBranch: s.gitCurrentBranch(),
+		TechStack:     s.detectStack(),
+		FileTree:      tree,
 	}, nil
 }
 
@@ -101,4 +106,20 @@ func (s *Scanner) detectStack() []string {
 		}
 	}
 	return stack
+}
+
+func (s *Scanner) gitRemoteOrigin() string {
+	out, err := exec.Command("git", "-C", s.root, "remote", "get-url", "origin").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func (s *Scanner) gitCurrentBranch() string {
+	out, err := exec.Command("git", "-C", s.root, "branch", "--show-current").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
