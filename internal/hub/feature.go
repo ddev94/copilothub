@@ -1,8 +1,8 @@
 package hub
 
 import (
-	"aikit/internal/ai"
-	"aikit/internal/config"
+	"copilothub/internal/ai"
+	"copilothub/internal/config"
 	"net/http"
 )
 

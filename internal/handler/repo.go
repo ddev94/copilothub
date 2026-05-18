@@ -2,7 +2,7 @@ package handler
 
 import (
 	"net/http"
-	"aikit/internal/repo"
+	"copilothub/internal/repo"
 )
 
 type RepoHandler struct {

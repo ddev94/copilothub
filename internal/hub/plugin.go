@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// ExternalManifest is the aikit.json file in an external plugin repo.
+// ExternalManifest is the copilothub.json file in an external plugin repo.
 type ExternalManifest struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -40,7 +40,7 @@ type InstalledPlugin struct {
 	Manifest   ExternalManifest `json:"manifest"`
 }
 
-// PluginRegistry manages the ~/.aikit/registry.json file.
+// PluginRegistry manages the ~/.copilothub/registry.json file.
 type PluginRegistry struct {
 	path    string
 	Plugins []InstalledPlugin `json:"plugins"`
@@ -48,7 +48,7 @@ type PluginRegistry struct {
 
 func HubDir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".aikit")
+	return filepath.Join(home, ".copilothub")
 }
 
 func LoadPluginRegistry() (*PluginRegistry, error) {
@@ -202,7 +202,7 @@ func waitForPort(port int, timeout time.Duration) error {
 	return fmt.Errorf("port %d not open after %s", port, timeout)
 }
 
-// FetchExternalManifest downloads aikit.json from a GitHub repo.
+// FetchExternalManifest downloads copilothub.json from a GitHub repo.
 // repoURL is like "github.com/user/repo"
 func FetchExternalManifest(repoURL string) (*ExternalManifest, error) {
 	repoURL = strings.TrimPrefix(repoURL, "https://")
@@ -214,7 +214,7 @@ func FetchExternalManifest(repoURL string) (*ExternalManifest, error) {
 	if len(parts) < 3 {
 		return nil, fmt.Errorf("invalid repository URL: %s", repoURL)
 	}
-	rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/aikit.json", parts[1], parts[2])
+	rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/copilothub.json", parts[1], parts[2])
 	resp, err := http.Get(rawURL) //nolint:gosec
 	if err != nil {
 		return nil, fmt.Errorf("fetch manifest: %w", err)

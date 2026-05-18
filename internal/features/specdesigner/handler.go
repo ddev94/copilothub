@@ -1,9 +1,9 @@
 package specdesigner
 
 import (
-	"aikit/internal/ai"
-	"aikit/internal/features/specdesigner/spec"
-	"aikit/internal/repo"
+	"copilothub/internal/ai"
+	"copilothub/internal/features/specdesigner/spec"
+	"copilothub/internal/repo"
 	"encoding/json"
 	"fmt"
 	"net/http"

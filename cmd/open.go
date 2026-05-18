@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"aikit/internal/server"
+	"copilothub/internal/server"
 	"time"
 
 	"github.com/spf13/cobra"

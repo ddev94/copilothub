@@ -1,8 +1,8 @@
 package specdesigner
 
 import (
-	"aikit/internal/hub"
-	"aikit/pkg/version"
+	"copilothub/internal/hub"
+	"copilothub/pkg/version"
 	"net/http"
 )
 

@@ -1,4 +1,4 @@
-module aikit
+module copilothub
 
 go 1.24
 

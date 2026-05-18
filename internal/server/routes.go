@@ -1,11 +1,11 @@
 package server
 
 import (
-	"aikit/internal/ai"
-	"aikit/internal/config"
-	"aikit/internal/features/specdesigner"
-	"aikit/internal/handler"
-	"aikit/internal/hub"
+	"copilothub/internal/ai"
+	"copilothub/internal/config"
+	"copilothub/internal/features/specdesigner"
+	"copilothub/internal/handler"
+	"copilothub/internal/hub"
 	"encoding/json"
 	"fmt"
 	"net/http"

@@ -4,8 +4,8 @@ VERSION := 0.1.0
 
 # Build everything (frontend first, then Go binary)
 build: build-frontend
-	@go build -o bin/spec-designer .
-	@echo "Built bin/spec-designer"
+	@go build -o bin/copilothub .
+	@echo "Built bin/copilothub"
 
 # Build only the frontend (Vite → internal/ui/dist)
 build-frontend:
@@ -20,8 +20,8 @@ dev:
 
 # Install globally
 install: build
-	@sudo cp bin/spec-designer /usr/local/bin/
-	@echo "Installed to /usr/local/bin/spec-designer"
+	@sudo cp bin/copilothub /usr/local/bin/
+	@echo "Installed to /usr/local/bin/copilothub"
 
 # Clean build artifacts
 clean:

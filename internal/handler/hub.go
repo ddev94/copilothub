@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"aikit/internal/hub"
+	"copilothub/internal/hub"
 	"encoding/json"
 	"net/http"
 )

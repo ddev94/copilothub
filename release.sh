@@ -58,10 +58,10 @@ git push origin "v${VERSION}"
 echo ""
 echo "▶ Creating GitHub release..."
 gh release create "v${VERSION}" \
-    bin/spec-designer-darwin-amd64 \
-    bin/spec-designer-darwin-arm64 \
-    bin/spec-designer-linux-amd64 \
-    bin/spec-designer-windows-amd64.exe \
+    bin/copilothub-darwin-amd64 \
+    bin/copilothub-darwin-arm64 \
+    bin/copilothub-linux-amd64 \
+    bin/copilothub-windows-amd64.exe \
     --title "v${VERSION}" \
     --notes "Release v${VERSION}
 
@@ -69,26 +69,26 @@ gh release create "v${VERSION}" \
 
 ### macOS/Linux
 \`\`\`bash
-curl -o- https://raw.githubusercontent.com/azoom-nguyen-thanh-duong/spec-designer/main/install.sh | bash
+curl -o- https://raw.githubusercontent.com/azoom-nguyen-thanh-duong/copilothub/main/install.sh | bash
 \`\`\`
 
 Or with wget:
 \`\`\`bash
-wget -qO- https://raw.githubusercontent.com/azoom-nguyen-thanh-duong/spec-designer/main/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/azoom-nguyen-thanh-duong/copilothub/main/install.sh | bash
 \`\`\`
 
 ## Manual Download
 
 Download the binary for your platform:
-- \`spec-designer-darwin-amd64\` - macOS Intel
-- \`spec-designer-darwin-arm64\` - macOS Apple Silicon
-- \`spec-designer-linux-amd64\` - Linux 64-bit
-- \`spec-designer-windows-amd64.exe\` - Windows 64-bit
+- \`copilothub-darwin-amd64\` - macOS Intel
+- \`copilothub-darwin-arm64\` - macOS Apple Silicon
+- \`copilothub-linux-amd64\` - Linux 64-bit
+- \`copilothub-windows-amd64.exe\` - Windows 64-bit
 
 Make it executable and move to your PATH:
 \`\`\`bash
-chmod +x spec-designer-*
-sudo mv spec-designer-* /usr/local/bin/spec-designer
+chmod +x copilothub-*
+sudo mv copilothub-* /usr/local/bin/copilothub
 \`\`\`
 
 ## What's Changed

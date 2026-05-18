@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"aikit/internal/features/specdesigner"
-	"aikit/internal/hub"
+	"copilothub/internal/features/specdesigner"
+	"copilothub/internal/hub"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -25,7 +25,7 @@ func newListCommand() *cobra.Command {
 			reg, err := hub.LoadPluginRegistry()
 			if err != nil || len(reg.Plugins) == 0 {
 				fmt.Println("\nExternal features: (none installed)")
-				fmt.Println("\nInstall with: aikit install github.com/user/plugin-name")
+				fmt.Println("\nInstall with: copilothub install github.com/user/plugin-name")
 				return nil
 			}
 			fmt.Printf("\nExternal features (%d installed):\n", len(reg.Plugins))

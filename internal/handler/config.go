@@ -3,7 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"aikit/internal/config"
+	"copilothub/internal/config"
 )
 
 type ConfigHandler struct {

@@ -1,4 +1,4 @@
-# spec-designer
+# copilothub
 
 AI-powered Software Requirements Document (SRD) designer for your repository. Runs as a local CLI that opens a browser-based editor, keeping all specs stored in your project.
 
@@ -9,7 +9,7 @@ AI-powered Software Requirements Document (SRD) designer for your repository. Ru
 - Create and manage multiple SRDs per repository
 - AI-assisted generation using GitHub Copilot
 - Three-column layout: document list · markdown editor · AI chat panel
-- Specs stored locally in `.spec-designer/specs/` as JSON files
+- Specs stored locally in `.copilothub/specs/` as JSON files
 
 ## Prerequisites
 
@@ -22,28 +22,28 @@ AI-powered Software Requirements Document (SRD) designer for your repository. Ru
 ### From source
 
 ```bash
-git clone https://github.com/your-org/spec-designer
-cd spec-designer
+git clone https://github.com/your-org/copilothub
+cd copilothub
 make install          # builds frontend + Go binary, copies to /usr/local/bin
 ```
 
 ### Build only (no install)
 
 ```bash
-make build            # outputs bin/spec-designer
+make build            # outputs bin/copilothub
 ```
 
 ## Usage
 
 ```bash
 # Open the UI for the current repository
-spec-designer open
+copilothub open
 
 # Specify a port (default: 3000)
-spec-designer open --port 8080
+copilothub open --port 8080
 
 # Target a different directory
-spec-designer open --workdir /path/to/repo
+copilothub open --workdir /path/to/repo
 ```
 
 The browser opens automatically at `http://localhost:3000`.
@@ -67,7 +67,7 @@ go run . open
 ├── cmd/                  CLI commands (open, register)
 ├── internal/
 │   ├── ai/               GitHub Copilot integration
-│   ├── config/           Per-repo config (.spec-designer/config.json)
+│   ├── config/           Per-repo config (.copilothub/config.json)
 │   ├── handler/          HTTP handlers (spec, AI, config, repo)
 │   ├── repo/             Git repository scanner
 │   ├── server/           HTTP server + embedded frontend
@@ -83,10 +83,10 @@ go run . open
 
 ## Configuration
 
-Settings are stored in `.spec-designer/config.json` within the repository. You can also override the AI token via environment variable:
+Settings are stored in `.copilothub/config.json` within the repository. You can also override the AI token via environment variable:
 
 ```bash
-GITHUB_TOKEN=ghp_xxx spec-designer open
+GITHUB_TOKEN=ghp_xxx copilothub open
 ```
 
 ## Makefile targets

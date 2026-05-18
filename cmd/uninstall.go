@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"aikit/internal/hub"
+	"copilothub/internal/hub"
 	"fmt"
 	"os"
 

@@ -23,7 +23,7 @@ onMounted(async () => {
       description: 'Generate SRD documents and user stories from requirements',
       icon: '📄',
       category: 'documentation',
-      author: 'aikit',
+      author: 'copilothub',
       type: 'builtin',
       frontendRoute: '/features/spec-designer',
     }]
@@ -84,7 +84,7 @@ function open(feature: FeatureManifest) {
           >
             <span class="text-2xl opacity-40">+</span>
             <p class="text-sm font-medium">Install a feature</p>
-            <p class="text-xs">Run: <code class="bg-muted px-1 rounded">aikit install &lt;repo&gt;</code></p>
+            <p class="text-xs">Run: <code class="bg-muted px-1 rounded">copilothub install &lt;repo&gt;</code></p>
           </div>
         </div>
       </section>

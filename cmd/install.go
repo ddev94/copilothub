@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"aikit/internal/hub"
+	"copilothub/internal/hub"
 	"fmt"
 	"path/filepath"
 
@@ -12,7 +12,7 @@ func newInstallCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:     "install <github-repo>",
 		Short:   "Install an external feature from a GitHub repository",
-		Example: "  aikit install github.com/user/deep-wiki",
+		Example: "  copilothub install github.com/user/deep-wiki",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repoURL := args[0]

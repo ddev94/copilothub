@@ -2,7 +2,7 @@ package server
 
 import (
 	"net/http"
-	"aikit/internal/ui"
+	"copilothub/internal/ui"
 )
 
 func frontendHandler() http.Handler {

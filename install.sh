@@ -1,12 +1,12 @@
 #!/bin/bash
 # Spec Designer Installer for macOS and Linux
-# This script downloads and installs spec-designer from GitHub releases
+# This script downloads and installs copilothub from GitHub releases
 
 set -e
 
 INSTALL_DIR="/usr/local/bin"
-BINARY_NAME="spec-designer"
-GITHUB_REPO="azoom-nguyen-thanh-duong/spec-designer"
+BINARY_NAME="copilothub"
+GITHUB_REPO="azoom-nguyen-thanh-duong/copilothub"
 VERSION="${1:-latest}"
 
 echo "🚀 Spec Designer Installer"
@@ -26,14 +26,14 @@ ARCH="$(uname -m)"
 case "$OS" in
     Darwin*)
         if [ "$ARCH" = "arm64" ]; then
-            BINARY_URL_SUFFIX="spec-designer-darwin-arm64"
+            BINARY_URL_SUFFIX="copilothub-darwin-arm64"
         else
-            BINARY_URL_SUFFIX="spec-designer-darwin-amd64"
+            BINARY_URL_SUFFIX="copilothub-darwin-amd64"
         fi
         ;;
     Linux*)
         if [ "$ARCH" = "x86_64" ]; then
-            BINARY_URL_SUFFIX="spec-designer-linux-amd64"
+            BINARY_URL_SUFFIX="copilothub-linux-amd64"
         else
             echo "❌ Unsupported architecture: $ARCH"
             exit 1
@@ -122,15 +122,15 @@ echo "✅ Installation complete!"
 echo ""
 
 # Verify
-if command -v spec-designer >/dev/null 2>&1; then
-    INSTALLED_VERSION=$(spec-designer --version)
+if command -v copilothub >/dev/null 2>&1; then
+    INSTALLED_VERSION=$(copilothub --version)
     echo "🎉 $INSTALLED_VERSION"
     echo ""
     echo "Try it:"
-    echo "  spec-designer --help"
-    echo "  spec-designer open"
+    echo "  copilothub --help"
+    echo "  copilothub open"
 else
-    echo "⚠️  Installation succeeded but 'spec-designer' command not found in PATH"
+    echo "⚠️  Installation succeeded but 'copilothub' command not found in PATH"
     echo ""
     echo "Add this to your ~/.zshrc or ~/.bashrc:"
     echo "  export PATH=\"$INSTALL_DIR:\$PATH\""

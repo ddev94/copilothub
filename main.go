@@ -1,6 +1,6 @@
 package main
 
-import "aikit/cmd"
+import "copilothub/cmd"
 
 func main() {
 	cmd.Execute()
