@@ -19,8 +19,69 @@ export interface AIConfig {
   model: string;
 }
 
+export interface KnowledgeConfig {
+  enabled: boolean;
+  serviceUrl: string;
+  topK: number;
+}
+
 export interface Config {
   ai: AIConfig;
+  knowledge: KnowledgeConfig;
+}
+
+export interface KnowledgeDocument {
+  id: string;
+  name: string;
+  sourceFile: string;
+  createdAt: string;
+}
+
+export interface LocalProject {
+  id: string;
+  name: string;
+  path: string;
+}
+
+export interface WikiChatChunk {
+  id?: string;
+  documentId?: string;
+  content: string;
+  score: number;
+  sourceFile?: string;
+}
+
+export interface WikiChatTurn {
+  question: string;
+  answer: string;
+}
+
+export interface WikiSessionMeta {
+  projectPath: string;
+  sectionKey: string;
+  title: string;
+}
+
+export interface WikiChatRequest {
+  projectPath: string;
+  sectionKey: string;
+  question: string;
+  history: WikiChatTurn[];
+}
+
+export interface WikiChatResponse {
+  answer: string;
+  chunks: WikiChatChunk[];
+}
+
+export interface KnowledgeUploadResult {
+  file: string;
+  ok: boolean;
+  message?: string;
+}
+
+export interface KnowledgeUploadResponse {
+  results: KnowledgeUploadResult[];
 }
 
 export interface AuthStatus {

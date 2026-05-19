@@ -12,12 +12,19 @@ const (
 )
 
 type Config struct {
-	AI AIConfig `json:"ai"`
+	AI        AIConfig        `json:"ai"`
+	Knowledge KnowledgeConfig `json:"knowledge"`
 }
 
 type AIConfig struct {
 	Token string `json:"token"` // optional override; uses gh CLI auth if empty
 	Model string `json:"model"`
+}
+
+type KnowledgeConfig struct {
+	Enabled    bool   `json:"enabled"`
+	ServiceURL string `json:"serviceUrl"`
+	TopK       int    `json:"topK"`
 }
 
 type Store struct {
@@ -43,6 +50,15 @@ func (s *Store) Load() (*Config, error) {
 	if t := os.Getenv("GITHUB_TOKEN"); t != "" {
 		cfg.AI.Token = t
 	}
+	if u := os.Getenv("KNOWLEDGE_SERVICE_URL"); u != "" {
+		cfg.Knowledge.ServiceURL = u
+	}
+	if cfg.Knowledge.ServiceURL == "" {
+		cfg.Knowledge.ServiceURL = "http://localhost:8001"
+	}
+	if cfg.Knowledge.TopK <= 0 {
+		cfg.Knowledge.TopK = 6
+	}
 	return &cfg, nil
 }
 
@@ -58,5 +74,16 @@ func (s *Store) Save(cfg *Config) error {
 }
 
 func (s *Store) defaults() *Config {
-	return &Config{AI: AIConfig{Token: os.Getenv("GITHUB_TOKEN")}}
+	serviceURL := os.Getenv("KNOWLEDGE_SERVICE_URL")
+	if serviceURL == "" {
+		serviceURL = "http://localhost:8001"
+	}
+	return &Config{
+		AI: AIConfig{Token: os.Getenv("GITHUB_TOKEN")},
+		Knowledge: KnowledgeConfig{
+			Enabled:    true,
+			ServiceURL: serviceURL,
+			TopK:       6,
+		},
+	}
 }

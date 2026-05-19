@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useRepoStore } from "@/stores/repo";
 import { api } from "@/api";
@@ -11,7 +11,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import ConfigDialog from "./ConfigDialog.vue";
-import type { ClarifyResponse } from "@/types";
+import type { ClarifyResponse, LocalProject } from "@/types";
 
 const router = useRouter();
 const repoStore = useRepoStore();
@@ -23,12 +23,16 @@ type ClarifyMode = "source" | "wiki";
 const clarifyMode = ref<ClarifyMode>("source");
 
 // Wiki
-type WikiTab = "url" | "paste";
-const wikiTab = ref<WikiTab>("url");
+type WikiTab = "url" | "paste" | "project";
+const wikiTab = ref<WikiTab>("project");
 const wikiUrl = ref("");
 const wikiContent = ref("");
 const fetchingWiki = ref(false);
 const wikiError = ref("");
+const wikiProjects = ref<LocalProject[]>([]);
+const wikiProjectPath = ref("");
+const wikiQuestion = ref("");
+const askingWiki = ref(false);
 
 // ── Result state ─────────────────────────────────────────────────────
 const loading = ref(false);
@@ -53,6 +57,18 @@ const canRun = computed(() => {
 });
 
 // ── Actions ──────────────────────────────────────────────────────────
+onMounted(async () => {
+  try {
+    const res = await api.wiki.projects();
+    wikiProjects.value = res.projects;
+    if (res.projects.length > 0) {
+      wikiProjectPath.value = res.projects[0].path;
+    }
+  } catch {
+    // ignore
+  }
+});
+
 async function fetchWikiFromUrl() {
   if (!wikiUrl.value.trim()) return;
   fetchingWiki.value = true;
@@ -65,6 +81,26 @@ async function fetchWikiFromUrl() {
     wikiError.value = e instanceof Error ? e.message : "Không thể tải URL này";
   } finally {
     fetchingWiki.value = false;
+  }
+}
+
+async function askWikiProject() {
+  if (!wikiProjectPath.value || !wikiQuestion.value.trim()) return;
+  askingWiki.value = true;
+  wikiError.value = "";
+  wikiContent.value = "";
+  try {
+    const res = await api.wiki.chat({
+      projectPath: wikiProjectPath.value,
+      sectionKey: "spec-clarify",
+      question: wikiQuestion.value.trim(),
+      history: [],
+    });
+    wikiContent.value = res.answer;
+  } catch (e) {
+    wikiError.value = e instanceof Error ? e.message : "Ask wiki failed";
+  } finally {
+    askingWiki.value = false;
   }
 }
 
@@ -275,6 +311,17 @@ function categoryLabel(category: string) {
               <button
                 class="flex-1 py-1.5 text-xs font-medium transition-colors"
                 :class="
+                  wikiTab === 'project'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
+                "
+                @click="wikiTab = 'project'"
+              >
+                Project Wiki
+              </button>
+              <button
+                class="flex-1 py-1.5 text-xs font-medium transition-colors border-l border-border"
+                :class="
                   wikiTab === 'url'
                     ? 'bg-primary text-primary-foreground'
                     : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
@@ -294,6 +341,29 @@ function categoryLabel(category: string) {
               >
                 Paste
               </button>
+            </div>
+
+            <div v-if="wikiTab === 'project'" class="space-y-2">
+              <select v-model="wikiProjectPath" class="w-full h-8 rounded-md border border-border bg-background px-2 text-xs">
+                <option v-for="p in wikiProjects" :key="p.id" :value="p.path">{{ p.name }} — {{ p.path }}</option>
+              </select>
+              <div class="flex gap-1.5">
+                <Input
+                  v-model="wikiQuestion"
+                  placeholder="Hỏi kiến thức từ project đã chọn..."
+                  class="flex-1 h-8 text-xs"
+                  :disabled="askingWiki"
+                  @keydown.enter="askWikiProject"
+                />
+                <Button
+                  variant="outline"
+                  class="h-8 px-3 text-xs shrink-0"
+                  :disabled="!wikiProjectPath || !wikiQuestion.trim() || askingWiki"
+                  @click="askWikiProject"
+                >
+                  {{ askingWiki ? "..." : "Ask" }}
+                </Button>
+              </div>
             </div>
 
             <div v-if="wikiTab === 'url'" class="flex gap-1.5">

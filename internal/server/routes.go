@@ -4,6 +4,7 @@ import (
 	"copilothub/internal/ai"
 	"copilothub/internal/config"
 	"copilothub/internal/features/specclarify"
+	"copilothub/internal/features/wiki"
 	"copilothub/internal/handler"
 	"copilothub/internal/hub"
 	"encoding/json"
@@ -22,6 +23,7 @@ func setupRoutes(mux *http.ServeMux, repoPath string) {
 	// Build registry with built-in features
 	registry := hub.NewRegistry()
 	registry.Register(specclarify.New())
+	registry.Register(wiki.New())
 
 	// Load and register external plugins
 	pluginReg, _ := hub.LoadPluginRegistry()

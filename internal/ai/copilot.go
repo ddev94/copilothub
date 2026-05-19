@@ -53,7 +53,7 @@ type SDKProvider struct {
 }
 
 func NewSDKProvider(token, model, cwd string) *SDKProvider {
-	return &SDKProvider{token: token, model: model, cwd: cwd}
+	return &SDKProvider{token: token, model: "gpt-4.1", cwd: cwd}
 }
 
 func (p *SDKProvider) start() {

@@ -36,6 +36,17 @@ onMounted(async () => {
         type: "builtin",
         frontendRoute: "/features/spec-clarify",
       },
+      {
+        id: "wiki",
+        name: "Wiki",
+        version: "1.0.0",
+        description: "Chat and manage project knowledge across local projects",
+        icon: "📚",
+        category: "knowledge",
+        author: "copilothub",
+        type: "builtin",
+        frontendRoute: "/features/wiki",
+      },
     ];
   }
 });

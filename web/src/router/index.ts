@@ -12,5 +12,21 @@ export const router = createRouter({
       path: "/features/spec-clarify/:pathMatch(.*)*",
       component: () => import("@/features/spec-clarify/EditorPage.vue"),
     },
+    {
+      path: "/features/spec-designer",
+      component: () => import("@/features/spec-designer/EditorPage.vue"),
+    },
+    {
+      path: "/features/spec-designer/:pathMatch(.*)*",
+      component: () => import("@/features/spec-designer/EditorPage.vue"),
+    },
+    {
+      path: "/features/wiki",
+      component: () => import("@/features/wiki/WikiPage.vue"),
+    },
+    {
+      path: "/features/wiki/:pathMatch(.*)*",
+      component: () => import("@/features/wiki/WikiPage.vue"),
+    },
   ],
 });

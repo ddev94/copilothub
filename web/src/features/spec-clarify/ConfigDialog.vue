@@ -33,7 +33,10 @@ onMounted(async () => {
 async function save() {
   saving.value = true
   try {
-    await api.config.save({ ai: { token: tokenOverride.value, model: model.value } })
+    await api.config.save({
+      ai: { token: tokenOverride.value, model: model.value },
+      knowledge: { enabled: true, serviceUrl: 'http://localhost:8001', topK: 6 },
+    })
     open.value = false
   } finally {
     saving.value = false

@@ -6,6 +6,11 @@ import type {
   WikiFetchResponse,
   RefineResponse,
   FeatureManifest,
+  KnowledgeDocument,
+  KnowledgeUploadResponse,
+  LocalProject,
+  WikiChatRequest,
+  WikiChatResponse,
 } from "@/types";
 
 const BASE = "/api";
@@ -60,5 +65,41 @@ export const api = {
   },
   auth: {
     status: () => request<AuthStatus>("/auth/status"),
+  },
+  wiki: {
+    projects: () => request<{ projects: LocalProject[] }>("/features/wiki/projects"),
+    chat: (payload: WikiChatRequest) =>
+      request<WikiChatResponse>("/features/wiki/chat", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    listDocuments: (projectPath: string) =>
+      request<{ documents: KnowledgeDocument[] }>(
+        `/features/wiki/knowledge/documents?projectPath=${encodeURIComponent(projectPath)}`,
+      ),
+    upload: async (files: File[], projectPath: string, replaceDuplicates: boolean) => {
+      const form = new FormData();
+      for (const file of files) {
+        form.append("files", file);
+      }
+      form.append("projectPath", projectPath);
+      form.append("replaceDuplicates", String(replaceDuplicates));
+      const res = await fetch(`${BASE}/features/wiki/knowledge/upload`, {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || res.statusText);
+      }
+      return res.json() as Promise<KnowledgeUploadResponse>;
+    },
+    deleteDocument: (id: string, projectPath: string) =>
+      request<{ ok: boolean }>(
+        `/features/wiki/knowledge/document/${id}?projectPath=${encodeURIComponent(projectPath)}`,
+        {
+          method: "DELETE",
+        },
+      ),
   },
 };
