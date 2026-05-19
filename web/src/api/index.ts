@@ -5,6 +5,7 @@ import type {
   Config,
   AuthStatus,
   ClarifyResponse,
+  SuggestResponse,
   FeatureManifest,
 } from "@/types";
 
@@ -53,7 +54,7 @@ export const api = {
   },
   ai: {
     suggest: (requirement: string, context: string) =>
-      request<{ content: string }>(`${SPEC_DESIGNER}/ai/suggest`, {
+      request<SuggestResponse>(`${SPEC_DESIGNER}/ai/suggest`, {
         method: "POST",
         body: JSON.stringify({ requirement, context }),
       }),

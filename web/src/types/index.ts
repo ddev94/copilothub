@@ -1,6 +1,8 @@
 export interface AcceptanceCriterion {
   id: string;
-  description: string;
+  given: string;
+  when: string;
+  then: string;
 }
 
 export interface TestCase {
@@ -74,6 +76,16 @@ export interface ClarifyQuestion {
 export interface ClarifyResponse {
   clear: boolean;
   questions: ClarifyQuestion[];
+}
+
+export interface RelevantFile {
+  path: string;
+  reason: string;
+}
+
+export interface SuggestResponse {
+  content: string;
+  relevantFiles: RelevantFile[];
 }
 
 export interface FeatureManifest {

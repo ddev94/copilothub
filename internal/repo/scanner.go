@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -122,4 +123,23 @@ func (s *Scanner) gitCurrentBranch() string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// FormatTree formats a Node slice as an indented directory listing.
+func FormatTree(nodes []Node, indent int) string {
+	var b strings.Builder
+	writeTree(&b, nodes, indent)
+	return b.String()
+}
+
+func writeTree(b *strings.Builder, nodes []Node, indent int) {
+	prefix := strings.Repeat("  ", indent)
+	for _, n := range nodes {
+		if n.IsDir {
+			fmt.Fprintf(b, "%s%s/\n", prefix, n.Name)
+			writeTree(b, n.Children, indent+1)
+		} else {
+			fmt.Fprintf(b, "%s%s\n", prefix, n.Name)
+		}
+	}
 }

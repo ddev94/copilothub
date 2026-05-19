@@ -37,7 +37,7 @@ function exportMarkdown() {
 
     md += `### Acceptance Criteria\n\n`;
     for (const [acIdx, ac] of story.acceptanceCriteria.entries()) {
-      md += `${acIdx + 1}. ${ac.description}\n`;
+      md += `${acIdx + 1}. **Given** ${ac.given} **When** ${ac.when} **Then** ${ac.then}\n`;
     }
     md += "\n";
 

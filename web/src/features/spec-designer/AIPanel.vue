@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed } from "vue";
 import { useAIStore } from "@/stores/ai";
 import { useSpecStore } from "@/stores/spec";
 import { api } from "@/api";
@@ -24,26 +24,47 @@ const vAutoResize = {
     el.style.height = el.scrollHeight + "px";
   },
 };
-import type { ClarifyQuestion } from "@/types";
+import type { ClarifyQuestion, RelevantFile } from "@/types";
 
 const aiStore = useAIStore();
 const specStore = useSpecStore();
 const customPrompt = ref("");
 
 const pendingSuggestion = ref<string | null>(null);
+const pendingRelevantFiles = ref<RelevantFile[]>([]);
 const suggestionMode = ref<"replace" | "append">("append");
+
+// Parsed summary of pending suggestion for display
+const parsedSuggestionSummary = computed(() => {
+  if (!pendingSuggestion.value) return null;
+  try {
+    const data = JSON.parse(pendingSuggestion.value);
+    if (Array.isArray(data.userStories)) {
+      return { storyCount: data.userStories.length };
+    }
+  } catch {
+    // not JSON — plain text message
+  }
+  return null;
+});
 
 // Re-clarify state
 const clarifying = ref(false);
 const clarifyQuestions = ref<(ClarifyQuestion & { answer: string })[]>([]);
 const showClarify = ref(false);
 
+function storeSuggestionResult(res: import("@/types").SuggestResponse | null) {
+  if (!res) return;
+  pendingSuggestion.value = res.content;
+  pendingRelevantFiles.value = res.relevantFiles ?? [];
+}
+
 async function regenerateStories() {
   if (!specStore.spec?.requirement) return;
   pendingSuggestion.value = null;
+  pendingRelevantFiles.value = [];
   suggestionMode.value = "replace";
-  const result = await aiStore.suggest(specStore.spec.requirement, "");
-  if (result) pendingSuggestion.value = result;
+  storeSuggestionResult(await aiStore.suggest(specStore.spec.requirement, ""));
 }
 
 async function addMoreStories() {
@@ -51,9 +72,9 @@ async function addMoreStories() {
   const existing = specStore.spec.userStories.map((s) => s.title).join(", ");
   const context = `Existing stories: ${existing}\n\nGenerate additional user stories that are NOT already covered.`;
   pendingSuggestion.value = null;
+  pendingRelevantFiles.value = [];
   suggestionMode.value = "append";
-  const result = await aiStore.suggest(specStore.spec.requirement, context);
-  if (result) pendingSuggestion.value = result;
+  storeSuggestionResult(await aiStore.suggest(specStore.spec.requirement, context));
 }
 
 async function reClarify() {
@@ -90,7 +111,7 @@ function buildCurrentContext(): string {
     text += `User Story: ${story.title}\n${story.story}\n`;
     text += `Acceptance Criteria:\n`;
     for (const ac of story.acceptanceCriteria) {
-      text += `- ${ac.description}\n`;
+      text += `- Given ${ac.given} When ${ac.when} Then ${ac.then}\n`;
     }
     text += `Test Cases:\n`;
     for (const tc of story.testCases) {
@@ -108,14 +129,15 @@ async function applyReClarify() {
     .join("\n\n");
   showClarify.value = false;
 
-  // Regenerate with clarification
   pendingSuggestion.value = null;
+  pendingRelevantFiles.value = [];
   suggestionMode.value = "replace";
-  const result = await aiStore.suggest(
-    specStore.spec.requirement,
-    `Current content has been reviewed. Additional clarification:\n${clarification}\n\nPlease regenerate or refine user stories based on these answers.`,
+  storeSuggestionResult(
+    await aiStore.suggest(
+      specStore.spec.requirement,
+      `Current content has been reviewed. Additional clarification:\n${clarification}\n\nPlease regenerate or refine user stories based on these answers.`,
+    ),
   );
-  if (result) pendingSuggestion.value = result;
 }
 
 function dismissClarify() {
@@ -126,12 +148,11 @@ function dismissClarify() {
 async function sendCustom() {
   if (!customPrompt.value.trim() || !specStore.spec) return;
   pendingSuggestion.value = null;
+  pendingRelevantFiles.value = [];
   suggestionMode.value = "append";
-  const result = await aiStore.suggest(
-    customPrompt.value,
-    specStore.spec.requirement,
+  storeSuggestionResult(
+    await aiStore.suggest(customPrompt.value, specStore.spec.requirement),
   );
-  if (result) pendingSuggestion.value = result;
   customPrompt.value = "";
 }
 
@@ -180,6 +201,7 @@ function applySuggestion() {
 
 function dismiss() {
   pendingSuggestion.value = null;
+  pendingRelevantFiles.value = [];
   aiStore.lastResult = null;
 }
 </script>
@@ -328,13 +350,41 @@ function dismiss() {
             {{ suggestionMode === "replace" ? "Replace all" : "Append" }}
           </Badge>
         </div>
+
+        <!-- Structured summary when AI returned user stories JSON -->
+        <div v-if="parsedSuggestionSummary" class="space-y-2">
+          <div class="bg-muted/50 border border-border rounded-lg px-3 py-2.5 text-xs">
+            <span class="font-medium">{{ parsedSuggestionSummary.storyCount }}</span>
+            user {{ parsedSuggestionSummary.storyCount === 1 ? "story" : "stories" }} generated
+          </div>
+
+          <div v-if="pendingRelevantFiles.length" class="space-y-1">
+            <p class="text-xs font-medium text-muted-foreground">Referenced files:</p>
+            <div
+              v-for="f in pendingRelevantFiles"
+              :key="f.path"
+              class="bg-muted/30 border border-border rounded px-2.5 py-1.5 text-xs space-y-0.5"
+            >
+              <code class="text-primary font-mono text-[11px] break-all">{{ f.path }}</code>
+              <p class="text-muted-foreground leading-snug">{{ f.reason }}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Plain text fallback (e.g. "content looks clear") -->
         <div
-          class="bg-muted/50 border border-border rounded-lg p-3 text-xs leading-relaxed max-h-64 overflow-y-auto whitespace-pre-wrap"
+          v-else
+          class="bg-muted/50 border border-border rounded-lg p-3 text-xs leading-relaxed max-h-40 overflow-y-auto whitespace-pre-wrap"
         >
           {{ pendingSuggestion }}
         </div>
+
         <div class="flex gap-2">
-          <Button class="flex-1 h-8 text-xs" @click="applySuggestion">
+          <Button
+            v-if="parsedSuggestionSummary"
+            class="flex-1 h-8 text-xs"
+            @click="applySuggestion"
+          >
             Apply
           </Button>
           <Button variant="outline" class="h-8 text-xs px-3" @click="dismiss">

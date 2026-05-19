@@ -47,11 +47,11 @@ function updateStoryField(id: string, field: string, value: string) {
   specStore.updateUserStory(id, { [field]: value });
 }
 
-function updateAC(storyId: string, acId: string, description: string) {
+function updateAC(storyId: string, acId: string, patch: Partial<AcceptanceCriterion>) {
   const story = specStore.spec?.userStories.find((s) => s.id === storyId);
   if (!story) return;
   const updated = story.acceptanceCriteria.map((ac) =>
-    ac.id === acId ? { ...ac, description } : ac,
+    ac.id === acId ? { ...ac, ...patch } : ac,
   );
   specStore.updateUserStory(storyId, { acceptanceCriteria: updated });
 }
@@ -69,7 +69,9 @@ function addAC(storyId: string) {
   if (!story) return;
   const newAC: AcceptanceCriterion = {
     id: crypto.randomUUID(),
-    description: "",
+    given: "",
+    when: "",
+    then: "",
   };
   specStore.updateUserStory(storyId, {
     acceptanceCriteria: [...story.acceptanceCriteria, newAC],
@@ -244,27 +246,50 @@ function addNewStory() {
                   <div
                     v-for="(ac, acIdx) in story.acceptanceCriteria"
                     :key="ac.id"
-                    class="flex gap-2 items-start group"
+                    class="rounded-md border border-border overflow-hidden group"
                   >
-                    <span class="text-muted-foreground text-sm shrink-0 mt-1.5"
-                      >{{ acIdx + 1 }}.</span
-                    >
-                    <Textarea
-                      v-auto-resize
-                      :model-value="ac.description"
-                      @update:model-value="
-                        updateAC(story.id, ac.id, String($event))
-                      "
-                      placeholder="Given... When... Then..."
-                      class="flex-1 resize-none text-sm border-transparent hover:border-border focus:border-border overflow-hidden"
-                    />
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      class="h-6 w-6 p-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 shrink-0 mt-0.5"
-                      @click="removeAC(story.id, ac.id)"
-                      >×</Button
-                    >
+                    <div class="flex items-center justify-between px-2.5 py-1 bg-muted/40 border-b border-border">
+                      <span class="text-xs font-medium text-muted-foreground">AC-{{ acIdx + 1 }}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="h-5 w-5 p-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 shrink-0"
+                        @click="removeAC(story.id, ac.id)"
+                        >×</Button
+                      >
+                    </div>
+                    <div class="divide-y divide-border">
+                      <div class="flex items-start gap-0">
+                        <span class="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-2 shrink-0 w-14 text-center leading-relaxed border-r border-border">GIVEN</span>
+                        <Textarea
+                          v-auto-resize
+                          :model-value="ac.given"
+                          @update:model-value="updateAC(story.id, ac.id, { given: String($event) })"
+                          placeholder="điều kiện / ngữ cảnh ban đầu..."
+                          class="flex-1 resize-none text-sm border-0 rounded-none focus-visible:ring-0 overflow-hidden py-1.5 px-2.5"
+                        />
+                      </div>
+                      <div class="flex items-start gap-0">
+                        <span class="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-2 shrink-0 w-14 text-center leading-relaxed border-r border-border">WHEN</span>
+                        <Textarea
+                          v-auto-resize
+                          :model-value="ac.when"
+                          @update:model-value="updateAC(story.id, ac.id, { when: String($event) })"
+                          placeholder="hành động của người dùng..."
+                          class="flex-1 resize-none text-sm border-0 rounded-none focus-visible:ring-0 overflow-hidden py-1.5 px-2.5"
+                        />
+                      </div>
+                      <div class="flex items-start gap-0">
+                        <span class="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-2 shrink-0 w-14 text-center leading-relaxed border-r border-border">THEN</span>
+                        <Textarea
+                          v-auto-resize
+                          :model-value="ac.then"
+                          @update:model-value="updateAC(story.id, ac.id, { then: String($event) })"
+                          placeholder="kết quả mong đợi..."
+                          class="flex-1 resize-none text-sm border-0 rounded-none focus-visible:ring-0 overflow-hidden py-1.5 px-2.5"
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

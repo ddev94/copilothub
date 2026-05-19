@@ -28,8 +28,10 @@ type UserStory struct {
 }
 
 type AcceptanceCriterion struct {
-	ID          string `json:"id"`
-	Description string `json:"description"`
+	ID    string `json:"id"`
+	Given string `json:"given"`
+	When  string `json:"when"`
+	Then  string `json:"then"`
 }
 
 type TestCase struct {
