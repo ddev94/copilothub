@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	dirName  = ".spec-designer"
+	dirName  = ".spec-clarify"
 	fileName = "config.json"
 )
 

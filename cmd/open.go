@@ -1,12 +1,12 @@
 package cmd
 
 import (
+	"copilothub/internal/server"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"copilothub/internal/server"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -17,7 +17,7 @@ func newOpenCommand() *cobra.Command {
 	var workDir string
 	cmd := &cobra.Command{
 		Use:   "open",
-		Short: "Start the spec designer UI for the current repository",
+		Short: "Start the spec clarify UI for the current repository",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var repoPath string
 			if workDir != "" {
@@ -35,7 +35,7 @@ func newOpenCommand() *cobra.Command {
 				return err
 			}
 			url := fmt.Sprintf("http://localhost:%d", port)
-			fmt.Printf("spec-designer running at %s\n", url)
+			fmt.Printf("spec-clarify running at %s\n", url)
 			go func() {
 				time.Sleep(500 * time.Millisecond)
 				openBrowser(url)

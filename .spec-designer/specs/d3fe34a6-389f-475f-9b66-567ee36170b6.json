@@ -1,0 +1,107 @@
+{
+  "id": "d3fe34a6-389f-475f-9b66-567ee36170b6",
+  "title": "Đăng ký user",
+  "version": "1.0.0",
+  "createdAt": "2026-05-18T11:37:04.177354+07:00",
+  "updatedAt": "2026-05-18T11:37:04.184468+07:00",
+  "requirement": "Đăng ký user với google, github",
+  "userStories": [
+    {
+      "id": "fcb6af5c-9ef5-4d22-b9c6-8a2947f5896d",
+      "title": "Register with Google",
+      "story": "As an end-user, I want to register using my Google account, so that I can quickly create an account without manually entering my details.",
+      "acceptanceCriteria": [
+        {
+          "id": "4dcbecf2-b425-4d84-8683-b7a27c2ede7d",
+          "description": "Given I am on the registration page, When I click 'Register with Google' and successfully authenticate with Google, Then my account should be created using my Google email and name."
+        },
+        {
+          "id": "1b466a75-ff20-4ef2-9502-2dd96f2d2be1",
+          "description": "Given I have already registered with my Google email via GitHub, When I register with Google using the same email, Then my accounts should be merged and I should have a single user profile."
+        },
+        {
+          "id": "8cc01dc3-2696-49b8-ae6f-79a4ed8ec557",
+          "description": "Given I deny Google authentication or an error occurs, When I attempt to register with Google, Then I should see an appropriate error message and my account should not be created."
+        }
+      ],
+      "testCases": [
+        {
+          "id": "9bd8fa8a-0be5-496b-a683-c56e31ebdb42",
+          "title": "Successful Google Registration",
+          "steps": "1. Navigate to the registration page.\n2. Click 'Register with Google'.\n3. Authenticate with a valid Google account.\n4. Grant necessary permissions.",
+          "expectedResult": "User account is created with Google email and name. User is logged in."
+        },
+        {
+          "id": "9dee4eec-de38-4886-8b1f-037cc77d4959",
+          "title": "Google Registration with Existing GitHub Email",
+          "steps": "1. Register with GitHub using email X.\n2. Log out.\n3. Register with Google using the same email X.\n4. Complete authentication.",
+          "expectedResult": "Accounts are merged. User has a single profile with email X."
+        },
+        {
+          "id": "2125d664-f2f0-47f5-af67-be1d0f91902f",
+          "title": "Google Registration Denied",
+          "steps": "1. Navigate to the registration page.\n2. Click 'Register with Google'.\n3. Deny authentication or close the Google login window.",
+          "expectedResult": "Registration is not completed. User sees an error message."
+        }
+      ]
+    },
+    {
+      "id": "6a66904f-d6be-45fc-aece-d1b8f3ba2664",
+      "title": "Register with GitHub",
+      "story": "As an end-user, I want to register using my GitHub account, so that I can quickly create an account without manually entering my details.",
+      "acceptanceCriteria": [
+        {
+          "id": "849b958f-0c51-4220-aa0c-e6e5c1431e0a",
+          "description": "Given I am on the registration page, When I click 'Register with GitHub' and successfully authenticate with GitHub, Then my account should be created using my GitHub email and name."
+        },
+        {
+          "id": "6427bf88-5f97-4af6-8971-fd45d3b16014",
+          "description": "Given I have already registered with my GitHub email via Google, When I register with GitHub using the same email, Then my accounts should be merged and I should have a single user profile."
+        },
+        {
+          "id": "257ad04c-6b30-4f20-875f-54b12591cfdf",
+          "description": "Given I deny GitHub authentication or an error occurs, When I attempt to register with GitHub, Then I should see an appropriate error message and my account should not be created."
+        }
+      ],
+      "testCases": [
+        {
+          "id": "4d04875a-d3d2-45fa-8de6-524f1bfdc633",
+          "title": "Successful GitHub Registration",
+          "steps": "1. Navigate to the registration page.\n2. Click 'Register with GitHub'.\n3. Authenticate with a valid GitHub account.\n4. Grant necessary permissions.",
+          "expectedResult": "User account is created with GitHub email and name. User is logged in."
+        },
+        {
+          "id": "93130d09-c09e-4dd0-b9e7-0787bc18898f",
+          "title": "GitHub Registration with Existing Google Email",
+          "steps": "1. Register with Google using email Y.\n2. Log out.\n3. Register with GitHub using the same email Y.\n4. Complete authentication.",
+          "expectedResult": "Accounts are merged. User has a single profile with email Y."
+        },
+        {
+          "id": "45a3a1cb-5f95-48fd-b030-a74d27a0f551",
+          "title": "GitHub Registration Denied",
+          "steps": "1. Navigate to the registration page.\n2. Click 'Register with GitHub'.\n3. Deny authentication or close the GitHub login window.",
+          "expectedResult": "Registration is not completed. User sees an error message."
+        }
+      ]
+    },
+    {
+      "id": "903aafc0-061e-4abe-a533-d37bd4ab4d18",
+      "title": "Prevent Duplicate Accounts",
+      "story": "As an end-user, I want my accounts to be merged if I register with the same email via Google or GitHub, so that I do not have multiple profiles for the same email.",
+      "acceptanceCriteria": [
+        {
+          "id": "5645e23b-f2c9-4d4a-8b63-fab47c109055",
+          "description": "Given I have registered with Google or GitHub using email Z, When I register with the other provider using the same email Z, Then my accounts should be merged into a single profile."
+        }
+      ],
+      "testCases": [
+        {
+          "id": "01af18b3-f68f-49cb-b230-99d9b6dd987d",
+          "title": "Merge Accounts on Same Email",
+          "steps": "1. Register with Google using email Z.\n2. Log out.\n3. Register with GitHub using the same email Z.\n4. Complete authentication.",
+          "expectedResult": "User has a single profile with email Z. Both Google and GitHub can be used to log in."
+        }
+      ]
+    }
+  ]
+}

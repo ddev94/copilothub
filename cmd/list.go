@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"copilothub/internal/features/specdesigner"
+	"copilothub/internal/features/specclarify"
 	"copilothub/internal/hub"
 	"fmt"
 
@@ -15,7 +15,7 @@ func newListCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Println("Built-in features:")
 			builtins := []hub.Feature{
-				specdesigner.New(),
+				specclarify.New(),
 			}
 			for _, f := range builtins {
 				m := f.Manifest()

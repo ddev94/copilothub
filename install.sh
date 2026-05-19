@@ -1,5 +1,5 @@
 #!/bin/bash
-# Spec Designer Installer for macOS and Linux
+# Spec Clarify Installer for macOS and Linux
 # This script downloads and installs copilothub from GitHub releases
 
 set -e
@@ -9,7 +9,7 @@ BINARY_NAME="copilothub"
 GITHUB_REPO="azoom-nguyen-thanh-duong/copilothub"
 VERSION="${1:-latest}"
 
-echo "🚀 Spec Designer Installer"
+echo "🚀 Spec Clarify Installer"
 echo "================="
 echo ""
 
@@ -90,14 +90,14 @@ fi
 # Make executable
 chmod +x "$TEMP_BINARY"
 
-SPEC_DESIGNER_BINARY="$TEMP_BINARY"
+SPEC_CLARIFY_BINARY="$TEMP_BINARY"
 
 # Check if already installed
 if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
     CURRENT_VERSION=$("$INSTALL_DIR/$BINARY_NAME" --version 2>/dev/null || echo "unknown")
-    NEW_VERSION=$("$SPEC_DESIGNER_BINARY" --version 2>/dev/null || echo "unknown")
+    NEW_VERSION=$("$SPEC_CLARIFY_BINARY" --version 2>/dev/null || echo "unknown")
     
-    echo "⚠️  Spec Designer is already installed: $CURRENT_VERSION"
+    echo "⚠️  Spec Clarify is already installed: $CURRENT_VERSION"
     echo "   New version: $NEW_VERSION"
     echo ""
     read -p "Do you want to replace it? [y/N] " -n 1 -r < /dev/tty
@@ -111,7 +111,7 @@ fi
 
 # Install
 echo "📥 Installing to $INSTALL_DIR/$BINARY_NAME ..."
-sudo cp "$SPEC_DESIGNER_BINARY" "$INSTALL_DIR/$BINARY_NAME"
+sudo cp "$SPEC_CLARIFY_BINARY" "$INSTALL_DIR/$BINARY_NAME"
 sudo chmod 755 "$INSTALL_DIR/$BINARY_NAME"
 
 # Clean up temp files

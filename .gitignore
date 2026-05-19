@@ -1,5 +1,5 @@
 dist
 node_modules/
-.spec-designer/
+.spec-clarify/
 bin/
 .DS_Store

@@ -1,11 +1,9 @@
 import type {
-  Spec,
-  SpecMeta,
   RepoInfo,
   Config,
   AuthStatus,
   ClarifyResponse,
-  SuggestResponse,
+  WikiFetchResponse,
   FeatureManifest,
 } from "@/types";
 
@@ -23,7 +21,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-const SPEC_DESIGNER = "/features/spec-designer";
+const SPEC_CLARIFY = "/features/spec-clarify";
 
 export const api = {
   hub: {
@@ -32,47 +30,16 @@ export const api = {
   repo: {
     info: () => request<RepoInfo>("/repo"),
   },
-  specs: {
-    list: () => request<SpecMeta[]>(`${SPEC_DESIGNER}/specs`),
-    create: (data?: Partial<Spec>) =>
-      request<Spec>(`${SPEC_DESIGNER}/specs`, {
-        method: "POST",
-        body: JSON.stringify(data ?? {}),
-      }),
-  },
-  spec: {
-    get: (id: string) => request<Spec>(`${SPEC_DESIGNER}/spec/${id}`),
-    save: (spec: Spec) =>
-      request<Spec>(`${SPEC_DESIGNER}/spec/${spec.id}`, {
-        method: "PUT",
-        body: JSON.stringify(spec),
-      }),
-    delete: (id: string) =>
-      request<{ ok: boolean }>(`${SPEC_DESIGNER}/spec/${id}`, {
-        method: "DELETE",
-      }),
-  },
-  ai: {
-    suggest: (requirement: string, context: string) =>
-      request<SuggestResponse>(`${SPEC_DESIGNER}/ai/suggest`, {
-        method: "POST",
-        body: JSON.stringify({ requirement, context }),
-      }),
-    clarify: (requirement: string) =>
-      request<ClarifyResponse>(`${SPEC_DESIGNER}/ai/clarify`, {
-        method: "POST",
-        body: JSON.stringify({ requirement }),
-      }),
-    generateSpec: (payload: {
-      title: string;
-      requirement: string;
-      clarification?: string;
-    }) =>
-      request<Spec>(`${SPEC_DESIGNER}/ai/generate-spec`, {
-        method: "POST",
-        body: JSON.stringify(payload),
-      }),
-  },
+  clarify: (payload: { spec: string; mode: string; wikiContent?: string }) =>
+    request<ClarifyResponse>(`${SPEC_CLARIFY}/clarify`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  fetchWiki: (url: string) =>
+    request<WikiFetchResponse>(`${SPEC_CLARIFY}/fetch-wiki`, {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
   config: {
     get: () => request<Config>("/config"),
     save: (cfg: Config) =>

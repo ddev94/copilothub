@@ -5,12 +5,12 @@ export const router = createRouter({
   routes: [
     { path: "/", component: () => import("@/hub/HubHome.vue") },
     {
-      path: "/features/spec-designer",
-      component: () => import("@/features/spec-designer/EditorPage.vue"),
+      path: "/features/spec-clarify",
+      component: () => import("@/features/spec-clarify/EditorPage.vue"),
     },
     {
-      path: "/features/spec-designer/:pathMatch(.*)*",
-      component: () => import("@/features/spec-designer/EditorPage.vue"),
+      path: "/features/spec-clarify/:pathMatch(.*)*",
+      component: () => import("@/features/spec-clarify/EditorPage.vue"),
     },
   ],
 });

@@ -1,42 +1,3 @@
-export interface AcceptanceCriterion {
-  id: string;
-  given: string;
-  when: string;
-  then: string;
-}
-
-export interface TestCase {
-  id: string;
-  title: string;
-  steps: string;
-  expectedResult: string;
-}
-
-export interface UserStory {
-  id: string;
-  title: string;
-  story: string;
-  acceptanceCriteria: AcceptanceCriterion[];
-  testCases: TestCase[];
-}
-
-export interface Spec {
-  id: string;
-  title: string;
-  version: string;
-  createdAt: string;
-  updatedAt: string;
-  requirement: string;
-  userStories: UserStory[];
-}
-
-export interface SpecMeta {
-  id: string;
-  title: string;
-  version: string;
-  updatedAt: string;
-}
-
 export interface FileNode {
   name: string;
   path: string;
@@ -67,25 +28,35 @@ export interface AuthStatus {
   cliPath: string;
 }
 
-export interface ClarifyQuestion {
+export type IssueSeverity = "high" | "medium" | "low";
+export type IssueCategory = "gap" | "conflict" | "ambiguity" | "suggestion";
+
+export interface ClarifyIssue {
   id: string;
-  question: string;
+  category: IssueCategory;
+  severity: IssueSeverity;
+  title: string;
+  description: string;
   suggestion: string;
 }
 
+export interface ClarifyQuestion {
+  id: string;
+  question: string;
+  context: string;
+  options: string[];
+  defaultAnswer: string;
+}
+
 export interface ClarifyResponse {
-  clear: boolean;
+  issues: ClarifyIssue[];
   questions: ClarifyQuestion[];
+  summary: string;
 }
 
-export interface RelevantFile {
-  path: string;
-  reason: string;
-}
-
-export interface SuggestResponse {
+export interface WikiFetchResponse {
   content: string;
-  relevantFiles: RelevantFile[];
+  title: string;
 }
 
 export interface FeatureManifest {
@@ -96,6 +67,6 @@ export interface FeatureManifest {
   icon: string;
   category: string;
   author: string;
-  type: "builtin" | "external";
+  type: string;
   frontendRoute: string;
 }

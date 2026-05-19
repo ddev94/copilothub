@@ -9,12 +9,12 @@ import (
 )
 
 type Info struct {
-	Name         string   `json:"name"`
-	Path         string   `json:"path"`
-	RemoteOrigin string   `json:"remoteOrigin"`
-	CurrentBranch string  `json:"currentBranch"`
-	TechStack    []string `json:"techStack"`
-	FileTree     []Node   `json:"fileTree"`
+	Name          string   `json:"name"`
+	Path          string   `json:"path"`
+	RemoteOrigin  string   `json:"remoteOrigin"`
+	CurrentBranch string   `json:"currentBranch"`
+	TechStack     []string `json:"techStack"`
+	FileTree      []Node   `json:"fileTree"`
 }
 
 type Node struct {
@@ -49,7 +49,7 @@ func (s *Scanner) Scan() (*Info, error) {
 
 var skipDirs = map[string]bool{
 	".git": true, "node_modules": true, "vendor": true,
-	".spec-designer": true, "dist": true, ".next": true,
+	".spec-clarify": true, "dist": true, ".next": true,
 	"__pycache__": true, ".venv": true, "build": true, "target": true,
 }
 

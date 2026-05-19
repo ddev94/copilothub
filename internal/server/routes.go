@@ -3,7 +3,7 @@ package server
 import (
 	"copilothub/internal/ai"
 	"copilothub/internal/config"
-	"copilothub/internal/features/specdesigner"
+	"copilothub/internal/features/specclarify"
 	"copilothub/internal/handler"
 	"copilothub/internal/hub"
 	"encoding/json"
@@ -21,7 +21,7 @@ func setupRoutes(mux *http.ServeMux, repoPath string) {
 
 	// Build registry with built-in features
 	registry := hub.NewRegistry()
-	registry.Register(specdesigner.New())
+	registry.Register(specclarify.New())
 
 	// Load and register external plugins
 	pluginReg, _ := hub.LoadPluginRegistry()
