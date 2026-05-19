@@ -14,11 +14,11 @@ export const router = createRouter({
     },
     {
       path: "/features/spec-designer",
-      component: () => import("@/features/spec-designer/EditorPage.vue"),
+      component: () => import("@/features/spec-clarify/EditorPage.vue"),
     },
     {
       path: "/features/spec-designer/:pathMatch(.*)*",
-      component: () => import("@/features/spec-designer/EditorPage.vue"),
+      component: () => import("@/features/spec-clarify/EditorPage.vue"),
     },
     {
       path: "/features/wiki",
