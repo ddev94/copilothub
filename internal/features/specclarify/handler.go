@@ -210,6 +210,82 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// === Refine Spec ===
+
+const refineSystemPrompt = `You are an expert Business Analyst. Your task is to rewrite and improve a spec/requirement document based on identified issues and user's Q&A answers.
+
+You will receive:
+1. The original spec document
+2. A list of issues found (gaps, conflicts, ambiguities, suggestions)
+3. User's answers to clarification questions
+
+Your job:
+- Fix all identified issues by updating, adding, or clarifying the relevant parts of the spec
+- Incorporate user's Q&A answers into the spec where applicable
+- Preserve the original spec's structure and format as much as possible
+- Make the spec clearer, more complete, and unambiguous
+- Write in the same language as the original spec
+
+Output ONLY the refined spec text. Do NOT include explanations, JSON, or markdown code blocks — just the improved spec document.`
+
+type refineReq struct {
+	Spec    string            `json:"spec"`
+	Issues  []clarifyIssue    `json:"issues"`
+	Answers map[string]string `json:"answers"`
+}
+
+type refineResponse struct {
+	RefinedSpec string `json:"refinedSpec"`
+}
+
+func (h *Handler) Refine(w http.ResponseWriter, r *http.Request) {
+	var req refineReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Spec) == "" {
+		writeError(w, "spec is required", http.StatusBadRequest)
+		return
+	}
+
+	var prompt strings.Builder
+	fmt.Fprintf(&prompt, "Original spec:\n%s\n\n", req.Spec)
+
+	if len(req.Issues) > 0 {
+		prompt.WriteString("Issues found during analysis:\n")
+		for _, issue := range req.Issues {
+			fmt.Fprintf(&prompt, "- [%s/%s] %s: %s\n  Suggestion: %s\n",
+				issue.Category, issue.Severity, issue.Title, issue.Description, issue.Suggestion)
+		}
+		prompt.WriteString("\n")
+	}
+
+	if len(req.Answers) > 0 {
+		prompt.WriteString("User's answers to clarification questions:\n")
+		for id, answer := range req.Answers {
+			fmt.Fprintf(&prompt, "- Question %s: %s\n", id, answer)
+		}
+		prompt.WriteString("\n")
+	}
+
+	prompt.WriteString("Please rewrite the spec to fix all issues and incorporate the answers above.")
+
+	ctx, cancel := aiContext(r)
+	defer cancel()
+
+	result, err := h.provider.Complete(ctx, []ai.Message{
+		{Role: "system", Content: refineSystemPrompt},
+		{Role: "user", Content: prompt.String()},
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, refineResponse{RefinedSpec: strings.TrimSpace(result)})
+}
+
 // === Fetch Wiki ===
 
 type fetchWikiReq struct {

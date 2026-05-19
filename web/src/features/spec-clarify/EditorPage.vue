@@ -38,6 +38,11 @@ const result = ref<ClarifyResponse | null>(null);
 // Q&A answers
 const answers = ref<Record<string, string>>({});
 
+// Refine state
+const refining = ref(false);
+const refineError = ref("");
+const refinedSpec = ref("");
+
 // ── Computed ─────────────────────────────────────────────────────────
 const needsWiki = computed(() => clarifyMode.value === "wiki");
 
@@ -91,6 +96,39 @@ function clearResults() {
   result.value = null;
   error.value = "";
   answers.value = {};
+  refinedSpec.value = "";
+  refineError.value = "";
+}
+
+async function runRefine() {
+  if (!result.value || refining.value) return;
+  refining.value = true;
+  refineError.value = "";
+  refinedSpec.value = "";
+  try {
+    const res = await api.refineSpec({
+      spec: specText.value,
+      issues: result.value.issues,
+      answers: answers.value,
+    });
+    refinedSpec.value = res.refinedSpec;
+  } catch (e) {
+    refineError.value = e instanceof Error ? e.message : "Cập nhật thất bại";
+  } finally {
+    refining.value = false;
+  }
+}
+
+function applyRefinedSpec() {
+  specText.value = refinedSpec.value;
+  refinedSpec.value = "";
+  refineError.value = "";
+  result.value = null;
+  answers.value = {};
+}
+
+async function copyRefinedSpec() {
+  await navigator.clipboard.writeText(refinedSpec.value);
 }
 
 // ── UI helpers ───────────────────────────────────────────────────────
@@ -493,6 +531,63 @@ function categoryLabel(category: string) {
             <p class="text-sm font-medium">
               Spec rõ ràng, không phát hiện vấn đề nào!
             </p>
+          </div>
+
+          <!-- Refine button -->
+          <div class="pt-2 border-t border-border space-y-3">
+            <Button
+              class="w-full h-10"
+              variant="default"
+              :disabled="refining"
+              @click="runRefine"
+            >
+              <span v-if="refining" class="flex items-center gap-2">
+                <span
+                  class="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin"
+                />
+                Đang cập nhật spec...
+              </span>
+              <span v-else>✏️ Cập nhật Spec theo phân tích</span>
+            </Button>
+
+            <p v-if="refineError" class="text-xs text-destructive">
+              {{ refineError }}
+            </p>
+
+            <!-- Refined spec output -->
+            <div v-if="refinedSpec" class="space-y-2">
+              <div class="flex items-center justify-between">
+                <p
+                  class="text-xs font-semibold text-muted-foreground uppercase tracking-wide"
+                >
+                  Spec đã cập nhật
+                </p>
+                <div class="flex gap-1.5">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="h-7 text-xs px-2"
+                    @click="copyRefinedSpec"
+                  >
+                    Copy
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    class="h-7 text-xs px-2"
+                    @click="applyRefinedSpec"
+                  >
+                    Apply vào input
+                  </Button>
+                </div>
+              </div>
+              <Textarea
+                :model-value="refinedSpec"
+                readonly
+                class="text-xs leading-relaxed resize-none bg-muted/30"
+                rows="16"
+              />
+            </div>
           </div>
         </div>
 

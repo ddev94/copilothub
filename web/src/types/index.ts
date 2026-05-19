@@ -59,6 +59,10 @@ export interface WikiFetchResponse {
   title: string;
 }
 
+export interface RefineResponse {
+  refinedSpec: string;
+}
+
 export interface FeatureManifest {
   id: string;
   name: string;

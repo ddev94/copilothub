@@ -4,6 +4,7 @@ import type {
   AuthStatus,
   ClarifyResponse,
   WikiFetchResponse,
+  RefineResponse,
   FeatureManifest,
 } from "@/types";
 
@@ -32,6 +33,15 @@ export const api = {
   },
   clarify: (payload: { spec: string; mode: string; wikiContent?: string }) =>
     request<ClarifyResponse>(`${SPEC_CLARIFY}/clarify`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  refineSpec: (payload: {
+    spec: string;
+    issues: ClarifyResponse["issues"];
+    answers: Record<string, string>;
+  }) =>
+    request<RefineResponse>(`${SPEC_CLARIFY}/refine`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
