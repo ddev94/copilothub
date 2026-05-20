@@ -6,7 +6,7 @@ set -e
 
 INSTALL_DIR="/usr/local/bin"
 BINARY_NAME="copilothub"
-GITHUB_REPO="azoom-nguyen-thanh-duong/copilothub"
+GITHUB_REPO="azoom-nguyen-thanh-duong/spec-designer"
 VERSION="${1:-latest}"
 
 echo "🚀 Spec Clarify Installer"

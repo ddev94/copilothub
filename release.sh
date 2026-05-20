@@ -69,12 +69,12 @@ gh release create "v${VERSION}" \
 
 ### macOS/Linux
 \`\`\`bash
-curl -o- https://raw.githubusercontent.com/azoom-nguyen-thanh-duong/copilothub/main/install.sh | bash
+curl -o- https://raw.githubusercontent.com/azoom-nguyen-thanh-duong/spec-designer/main/install.sh | bash
 \`\`\`
 
 Or with wget:
 \`\`\`bash
-wget -qO- https://raw.githubusercontent.com/azoom-nguyen-thanh-duong/copilothub/main/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/azoom-nguyen-thanh-duong/spec-designer/main/install.sh | bash
 \`\`\`
 
 ## Manual Download

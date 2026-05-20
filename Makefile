@@ -7,6 +7,15 @@ build: build-frontend
 	@go build -o bin/copilothub .
 	@echo "Built bin/copilothub"
 
+build-all:
+	@echo "Building for all platforms..."
+	@mkdir -p bin
+	@GOOS=linux GOARCH=amd64 go build -o bin/copilothub-linux-amd64 .
+	@GOOS=darwin GOARCH=amd64 go build -o bin/copilothub-darwin-amd64 .
+	@GOOS=darwin GOARCH=arm64 go build -o bin/copilothub-darwin-arm64 .
+	@GOOS=windows GOARCH=amd64 go build -o bin/copilothub-windows-amd64.exe .
+	@echo "Build completed for all platforms!"
+
 # Build only the frontend (Vite → internal/ui/dist)
 build-frontend:
 	@cd web && npm install && npm run build
