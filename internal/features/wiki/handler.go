@@ -549,3 +549,44 @@ func writeError(w http.ResponseWriter, msg string, code int) {
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg}) //nolint:errcheck
 }
+
+func (h *Handler) GetDocumentContent(w http.ResponseWriter, r *http.Request) {
+	c := h.kc.Load()
+	if c == nil {
+		writeError(w, "knowledge store not ready", http.StatusServiceUnavailable)
+		return
+	}
+	docID := r.URL.Query().Get("docId")
+	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
+	ctx := r.Context()
+
+	allDocs, _ := c.ListDocuments(ctx, projectID(projectPath))
+	pendingDocs, _ := c.PendingDocuments(ctx, projectID(projectPath))
+
+	var sourceFile, name string
+	for _, d := range append(allDocs, pendingDocs...) {
+		if d.ID == docID {
+			sourceFile = d.SourceFile
+			name = d.Name
+			break
+		}
+	}
+	if sourceFile == "" {
+		writeError(w, "document not found", http.StatusNotFound)
+		return
+	}
+
+	filePath := filepath.Join(projectPath, knowledgeFilesDir, sourceFile)
+	content, err := knowledge.ReadFileContent(filePath, sourceFile)
+	if err != nil {
+		writeError(w, "cannot read file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"content":    content,
+		"name":       name,
+		"sourceFile": sourceFile,
+		"isMarkdown": strings.HasSuffix(strings.ToLower(sourceFile), ".md"),
+	})
+}

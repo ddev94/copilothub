@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useKnowledgeStore } from "@/stores/knowledge";
+import { useRepoStore } from "@/stores/repo";
 import { Button } from "@/components/ui/button";
 
 const store = useKnowledgeStore();
+const repoStore = useRepoStore();
+const projectPath = computed(() => repoStore.info?.path ?? "");
 const fileInput = ref<HTMLInputElement | null>(null);
 
-onMounted(() => store.loadDocuments());
+onMounted(() => store.loadDocuments(projectPath.value));
 
 function triggerUpload() {
   fileInput.value?.click();
@@ -16,7 +19,7 @@ async function onFileChange(e: Event) {
   const input = e.target as HTMLInputElement;
   const files = Array.from(input.files ?? []);
   if (files.length === 0) return;
-  await store.uploadFiles(files, false);
+  await store.uploadFiles(files, false, projectPath.value);
   input.value = "";
 }
 
@@ -83,7 +86,7 @@ function extIcon(name: string) {
           <button
             class="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity p-0.5 text-xs shrink-0"
             title="Xoá"
-            @click="store.deleteDocument(doc.id)"
+            @click="store.deleteDocument(doc.id, projectPath)"
           >
             ✕
           </button>

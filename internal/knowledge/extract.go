@@ -13,6 +13,11 @@ import (
 	"github.com/ledongthuc/pdf"
 )
 
+// ReadFileContent extracts readable text from a file (markdown, PDF, DOCX).
+func ReadFileContent(filePath, filename string) (string, error) {
+	return extractText(filePath, filename)
+}
+
 func extractText(filePath, filename string) (string, error) {
 	ext := strings.ToLower(filepath.Ext(filename))
 	switch ext {

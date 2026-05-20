@@ -26,6 +26,10 @@ export const router = createRouter({
       component: () => import("@/features/wiki/WikiPage.vue"),
     },
     {
+      path: "/features/wiki/chat",
+      component: () => import("@/features/wiki/WikiChatPage.vue"),
+    },
+    {
       path: "/features/wiki/:pathMatch(.*)*",
       component: () => import("@/features/wiki/WikiPage.vue"),
     },

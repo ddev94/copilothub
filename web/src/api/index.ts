@@ -78,6 +78,10 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload),
       }),
+    getDocumentContent: (docId: string, projectPath: string) =>
+      request<{ content: string; name: string; sourceFile: string; isMarkdown: boolean }>(
+        `/features/wiki/knowledge/content?docId=${encodeURIComponent(docId)}&projectPath=${encodeURIComponent(projectPath)}`,
+      ),
     listDocuments: (projectPath: string) =>
       request<{ documents: KnowledgeDocument[] }>(
         `/features/wiki/knowledge/documents?projectPath=${encodeURIComponent(projectPath)}`,

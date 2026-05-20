@@ -1,14 +1,12 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { api } from "@/api";
-import type { KnowledgeDocument, LocalProject, WikiChatTurn, WikiSessionMeta } from "@/types";
+import type { KnowledgeDocument, WikiChatTurn, WikiSessionMeta } from "@/types";
 
 const THREADS_STORAGE_KEY = "wiki_threads_v1";
 const SESSIONS_STORAGE_KEY = "wiki_sessions_v1";
 
 export const useKnowledgeStore = defineStore("knowledge", () => {
-  const projects = ref<LocalProject[]>([]);
-  const selectedProjectPath = ref("");
   const documents = ref<KnowledgeDocument[]>([]);
   const pendingDocuments = ref<KnowledgeDocument[]>([]);
   const loading = ref(false);
@@ -32,23 +30,15 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
   function loadPersistedData() {
     try {
       const savedThreads = localStorage.getItem(THREADS_STORAGE_KEY);
-      if (savedThreads) {
-        threads.value = JSON.parse(savedThreads);
-      }
+      if (savedThreads) threads.value = JSON.parse(savedThreads);
       const savedSessions = localStorage.getItem(SESSIONS_STORAGE_KEY);
-      if (savedSessions) {
-        sessions.value = JSON.parse(savedSessions);
-      }
+      if (savedSessions) sessions.value = JSON.parse(savedSessions);
 
       for (const key of Object.keys(threads.value)) {
         if (sessions.value[key]) continue;
         const [projectPath, sectionKey] = key.split("::");
         if (!projectPath || !sectionKey) continue;
-        sessions.value[key] = {
-          projectPath,
-          sectionKey,
-          title: sectionKey,
-        };
+        sessions.value[key] = { projectPath, sectionKey, title: sectionKey };
       }
       persistSessions();
     } catch {
@@ -60,33 +50,25 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
   function ensureSession(projectPath: string, sectionKey: string) {
     const key = threadKey(projectPath, sectionKey);
     if (!sessions.value[key]) {
-      sessions.value[key] = {
-        projectPath,
-        sectionKey,
-        title: sectionKey,
-      };
+      sessions.value[key] = { projectPath, sectionKey, title: sectionKey };
       persistSessions();
     }
   }
 
   function getThread(projectPath: string, sectionKey: string): WikiChatTurn[] {
-    const key = threadKey(projectPath, sectionKey);
-    return threads.value[key] || [];
+    return threads.value[threadKey(projectPath, sectionKey)] || [];
   }
 
   function appendTurn(projectPath: string, sectionKey: string, turn: WikiChatTurn) {
     const key = threadKey(projectPath, sectionKey);
-    if (!threads.value[key]) {
-      threads.value[key] = [];
-    }
+    if (!threads.value[key]) threads.value[key] = [];
     threads.value[key].push(turn);
     ensureSession(projectPath, sectionKey);
     persistThreads();
   }
 
   function clearThread(projectPath: string, sectionKey: string) {
-    const key = threadKey(projectPath, sectionKey);
-    delete threads.value[key];
+    delete threads.value[threadKey(projectPath, sectionKey)];
     persistThreads();
   }
 
@@ -101,31 +83,14 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     return Object.values(sessions.value).filter((s) => s.projectPath === projectPath);
   }
 
-  async function loadProjects() {
-    error.value = null;
-    try {
-      const res = await api.wiki.projects();
-      projects.value = res.projects;
-      if (!selectedProjectPath.value && res.projects.length > 0) {
-        selectedProjectPath.value = res.projects[0].path;
-      }
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : "Load projects failed";
-    }
-  }
-
-  async function loadDocuments() {
-    if (!selectedProjectPath.value) {
-      documents.value = [];
-      pendingDocuments.value = [];
-      return;
-    }
+  async function loadDocuments(projectPath: string) {
+    if (!projectPath) { documents.value = []; pendingDocuments.value = []; return; }
     loading.value = true;
     error.value = null;
     try {
       const [docsRes, pendingRes] = await Promise.all([
-        api.wiki.listDocuments(selectedProjectPath.value),
-        api.wiki.listPending(selectedProjectPath.value),
+        api.wiki.listDocuments(projectPath),
+        api.wiki.listPending(projectPath),
       ]);
       documents.value = docsRes.documents;
       pendingDocuments.value = pendingRes.documents;
@@ -136,17 +101,17 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     }
   }
 
-  async function uploadFiles(files: File[], replaceDuplicates: boolean) {
-    if (!selectedProjectPath.value || files.length === 0) return;
+  async function uploadFiles(files: File[], replaceDuplicates: boolean, projectPath: string) {
+    if (!projectPath || files.length === 0) return;
     uploading.value = true;
     error.value = null;
     try {
-      const res = await api.wiki.upload(files, selectedProjectPath.value, replaceDuplicates);
+      const res = await api.wiki.upload(files, projectPath, replaceDuplicates);
       const failed = res.results.filter((r) => !r.ok);
       if (failed.length > 0) {
         error.value = `Upload failed: ${failed.map((f) => `${f.file}${f.message ? ` (${f.message})` : ""}`).join(", ")}`;
       }
-      await loadDocuments();
+      await loadDocuments(projectPath);
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Upload knowledge failed";
     } finally {
@@ -154,59 +119,49 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     }
   }
 
-  async function deleteDocument(id: string) {
-    if (!selectedProjectPath.value) return;
+  async function deleteDocument(id: string, projectPath: string) {
     error.value = null;
     try {
-      await api.wiki.deleteDocument(id, selectedProjectPath.value);
-      await loadDocuments();
+      await api.wiki.deleteDocument(id, projectPath);
+      await loadDocuments(projectPath);
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Delete knowledge failed";
     }
   }
 
-  async function approveDocument(id: string) {
-    if (!selectedProjectPath.value) return;
+  async function approveDocument(id: string, projectPath: string) {
     error.value = null;
     try {
-      await api.wiki.approveDocument(id, selectedProjectPath.value);
-      await loadDocuments();
+      await api.wiki.approveDocument(id, projectPath);
+      await loadDocuments(projectPath);
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Approve failed";
     }
   }
 
-  async function rejectDocument(id: string) {
-    if (!selectedProjectPath.value) return;
+  async function rejectDocument(id: string, projectPath: string) {
     error.value = null;
     try {
-      await api.wiki.rejectDocument(id, selectedProjectPath.value);
-      await loadDocuments();
+      await api.wiki.rejectDocument(id, projectPath);
+      await loadDocuments(projectPath);
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Reject failed";
     }
   }
 
-  async function approveAll() {
-    if (!selectedProjectPath.value) return;
+  async function approveAll(projectPath: string) {
     error.value = null;
     try {
-      await api.wiki.approveAll(selectedProjectPath.value);
-      await loadDocuments();
+      await api.wiki.approveAll(projectPath);
+      await loadDocuments(projectPath);
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Approve all failed";
     }
   }
 
-  function setSelectedProject(path: string) {
-    selectedProjectPath.value = path;
-  }
-
   loadPersistedData();
 
   return {
-    projects,
-    selectedProjectPath,
     documents,
     pendingDocuments,
     loading,
@@ -214,14 +169,12 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     error,
     threads,
     sessions,
-    loadProjects,
     loadDocuments,
     uploadFiles,
     deleteDocument,
     approveDocument,
     rejectDocument,
     approveAll,
-    setSelectedProject,
     getThread,
     appendTurn,
     clearThread,

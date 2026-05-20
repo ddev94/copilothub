@@ -69,4 +69,5 @@ func (f *Feature) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /knowledge/document/{id}/approve", f.h.ApproveDocument)
 	mux.HandleFunc("POST /knowledge/document/{id}/reject", f.h.RejectDocument)
 	mux.HandleFunc("POST /knowledge/approve-all", f.h.ApproveAll)
+	mux.HandleFunc("GET /knowledge/content", f.h.GetDocumentContent)
 }
