@@ -109,8 +109,7 @@ async function saveBranch() {
     await projectStore.fetch();
     editingBranch.value = false;
   } catch (e) {
-    gitError.value =
-      e instanceof Error ? e.message : "Failed to change branch";
+    gitError.value = e instanceof Error ? e.message : "Failed to change branch";
   } finally {
     changingBranch.value = false;
   }
@@ -220,16 +219,15 @@ async function saveBranch() {
           </div>
           <div class="px-5 py-5 space-y-4">
             <!-- Connected status -->
-            <div
-              v-if="project.repoCloned"
-              class="space-y-3"
-            >
+            <div v-if="project.repoCloned" class="space-y-3">
               <div
                 class="flex items-center gap-2 rounded border border-green-500/30 bg-green-500/5 px-3 py-2.5"
               >
                 <span class="text-green-500 text-sm">✓</span>
                 <div class="flex-1 min-w-0">
-                  <p class="text-sm font-mono truncate">{{ project.repoURL }}</p>
+                  <p class="text-sm font-mono truncate">
+                    {{ project.repoURL }}
+                  </p>
                 </div>
                 <Button
                   variant="outline"
@@ -270,7 +268,10 @@ async function saveBranch() {
                     Cancel
                   </Button>
                 </div>
-                <div v-else class="flex items-center gap-2 h-9 px-3 rounded-md border border-border bg-background">
+                <div
+                  v-else
+                  class="flex items-center gap-2 h-9 px-3 rounded-md border border-border bg-background"
+                >
                   <p class="text-sm font-mono flex-1">
                     {{ project.repoBranch || "(default)" }}
                   </p>
