@@ -6,10 +6,7 @@ import (
 	"path/filepath"
 )
 
-const (
-	dirName  = ".spec-clarify"
-	fileName = "config.json"
-)
+const fileName = "config.json"
 
 type Config struct {
 	AI        AIConfig        `json:"ai"`
@@ -36,8 +33,9 @@ type Store struct {
 	path string
 }
 
-func NewStore(repoPath string) *Store {
-	return &Store{path: filepath.Join(repoPath, dirName, fileName)}
+// NewStore creates a config store. baseDir is the data directory (e.g. ~/.copilothub).
+func NewStore(baseDir string) *Store {
+	return &Store{path: filepath.Join(baseDir, fileName)}
 }
 
 func (s *Store) Load() (*Config, error) {

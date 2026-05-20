@@ -1,17 +1,17 @@
 package handler
 
 import (
+	"copilothub/internal/config"
 	"encoding/json"
 	"net/http"
-	"copilothub/internal/config"
 )
 
 type ConfigHandler struct {
 	store *config.Store
 }
 
-func NewConfigHandler(repoPath string) *ConfigHandler {
-	return &ConfigHandler{store: config.NewStore(repoPath)}
+func NewConfigHandler(baseDir string) *ConfigHandler {
+	return &ConfigHandler{store: config.NewStore(baseDir)}
 }
 
 // Get returns config with sensitive fields masked for security.

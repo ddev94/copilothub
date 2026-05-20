@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { useRouter } from "vue-router";
-import { useRepoStore } from "@/stores/repo";
+import { useRoute, useRouter } from "vue-router";
+import { useProjectStore } from "@/stores/repo";
 import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,9 +11,12 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ClarifyResponse } from "@/types";
 
+const route = useRoute();
 const router = useRouter();
-const repoStore = useRepoStore();
-repoStore.fetch();
+const projectStore = useProjectStore();
+projectStore.fetch();
+
+const projectId = computed(() => route.params.projectId as string);
 
 // ── Input state ──────────────────────────────────────────────────────
 const specText = ref("");
@@ -57,7 +60,7 @@ async function runClarify() {
     // Auto-retrieve wiki content from current project's knowledge
     if (needsWiki.value) {
       const wikiRes = await api.wiki.chat({
-        projectPath: repoStore.info?.path ?? "",
+        projectId: projectId.value ?? "",
         sectionKey: "spec-clarify",
         question: specText.value.trim(),
         history: [],
@@ -191,18 +194,18 @@ function categoryLabel(category: string) {
         <div class="flex items-center gap-3">
           <button
             class="text-xs text-muted-foreground hover:text-foreground transition-colors"
-            @click="router.push('/')"
+            @click="router.push(`/projects/${projectId}`)"
           >
-            ← Hub
+            ← Project
           </button>
           <h1 class="text-sm font-bold">🔍 Spec Clarify</h1>
         </div>
         <div class="flex items-center gap-2">
           <p
-            v-if="repoStore.info"
+            v-if="projectStore.selectedProject"
             class="text-xs text-muted-foreground truncate max-w-48"
           >
-            {{ repoStore.info.name }}
+            {{ projectStore.selectedProject.name }}
           </p>
         </div>
       </div>
@@ -271,10 +274,7 @@ function categoryLabel(category: string) {
               <span class="text-base">📚</span>
               <div class="min-w-0">
                 <p class="text-xs font-medium truncate">
-                  {{ repoStore.info?.name || "Project" }}
-                </p>
-                <p class="text-[11px] text-muted-foreground truncate">
-                  {{ repoStore.info?.path }}
+                  {{ projectStore.selectedProject?.name || "Project" }}
                 </p>
               </div>
             </div>

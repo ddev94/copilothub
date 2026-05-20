@@ -61,7 +61,7 @@ export interface KnowledgeDocument {
 export interface LocalProject {
   id: string;
   name: string;
-  path: string;
+  createdAt?: string;
 }
 
 export interface WikiChatChunk {
@@ -78,13 +78,13 @@ export interface WikiChatTurn {
 }
 
 export interface WikiSessionMeta {
-  projectPath: string;
+  projectId: string;
   sectionKey: string;
   title: string;
 }
 
 export interface WikiChatRequest {
-  projectPath: string;
+  projectId: string;
   sectionKey: string;
   question: string;
   history: WikiChatTurn[];

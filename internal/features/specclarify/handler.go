@@ -20,13 +20,11 @@ func aiContext(r *http.Request) (context.Context, context.CancelFunc) {
 // Handler handles all spec-clarify operations.
 type Handler struct {
 	provider ai.Provider
-	scanner  *repo.Scanner
 }
 
-func NewHandler(provider ai.Provider, repoPath string) *Handler {
+func NewHandler(provider ai.Provider) *Handler {
 	return &Handler{
 		provider: provider,
-		scanner:  repo.NewScanner(repoPath),
 	}
 }
 
@@ -125,6 +123,7 @@ type clarifyReq struct {
 	Spec        string `json:"spec"`
 	Mode        string `json:"mode"` // "source" | "wiki"
 	WikiContent string `json:"wikiContent"`
+	ProjectPath string `json:"projectPath"`
 }
 
 type clarifyIssue struct {
@@ -176,8 +175,11 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		prompt.WriteString("Analyze the spec against the wiki content. Identify issues and generate Q&A for ambiguous points.")
 	default: // "source"
 		systemPrompt = clarifyWithSourcePrompt
-		info, _ := h.scanner.Scan()
-		appendRepoContext(&prompt, info)
+		if req.ProjectPath != "" {
+			scanner := repo.NewScanner(req.ProjectPath)
+			info, _ := scanner.Scan()
+			appendRepoContext(&prompt, info)
+		}
 		fmt.Fprintf(&prompt, "Spec document:\n%s\n\n", req.Spec)
 		prompt.WriteString("Analyze the spec against the source code. Identify issues and generate Q&A for ambiguous points.")
 	}

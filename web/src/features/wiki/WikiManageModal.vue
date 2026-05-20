@@ -16,7 +16,7 @@ import type { KnowledgeDocument } from "@/types";
 
 const props = defineProps<{
   open: boolean;
-  projectPath: string;
+  projectId: string;
 }>();
 
 const emit = defineEmits<{
@@ -144,7 +144,7 @@ async function startUpload(files: File[], replaceDuplicates: boolean) {
       await knowledge.uploadFiles(
         [queueItem.file],
         replaceDuplicates,
-        props.projectPath,
+        props.projectId,
       );
       queueItem.status = "done";
     } catch (e) {
@@ -167,7 +167,7 @@ async function doDelete() {
   if (!deletingDoc.value) return;
   deleting.value = true;
   try {
-    await knowledge.deleteDocument(deletingDoc.value.id, props.projectPath);
+    await knowledge.deleteDocument(deletingDoc.value.id, props.projectId);
   } finally {
     deleting.value = false;
     deletingDoc.value = null;
@@ -180,15 +180,15 @@ function cancelDelete() {
 
 // ── Approve / Reject ─────────────────────────────────────────────────────────
 async function approve(doc: KnowledgeDocument) {
-  await knowledge.approveDocument(doc.id, props.projectPath);
+  await knowledge.approveDocument(doc.id, props.projectId);
 }
 
 async function reject(doc: KnowledgeDocument) {
-  await knowledge.rejectDocument(doc.id, props.projectPath);
+  await knowledge.rejectDocument(doc.id, props.projectId);
 }
 
 async function approveAll() {
-  await knowledge.approveAll(props.projectPath);
+  await knowledge.approveAll(props.projectId);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -236,8 +236,8 @@ function formatDate(dateStr: string) {
 watch(
   () => props.open,
   async (val) => {
-    if (val && props.projectPath) {
-      await knowledge.loadDocuments(props.projectPath);
+    if (val && props.projectId) {
+      await knowledge.loadDocuments(props.projectId);
     } else {
       deletingDoc.value = null;
       showDuplicateConfirm.value = false;

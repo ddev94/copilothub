@@ -29,7 +29,7 @@ func (f *Feature) Manifest() hub.Manifest {
 }
 
 func (f *Feature) Init(ctx hub.FeatureContext) error {
-	f.h = NewHandler(ctx.AIProvider, ctx.WorkDir)
+	f.h = NewHandler(ctx.AIProvider)
 	return nil
 }
 

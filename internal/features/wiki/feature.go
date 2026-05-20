@@ -34,11 +34,11 @@ func (f *Feature) Manifest() hub.Manifest {
 func (f *Feature) Init(ctx hub.FeatureContext) error {
 	cfg, _ := ctx.Config.Load()
 
-	// Create handler immediately (client starts nil — endpoints return 503 until ready)
-	f.h = NewHandler(ctx.WorkDir, nil, ctx.AIProvider, cfg.Knowledge.TopK)
+	// Create handler — uses project store for listing and DataDir for knowledge storage
+	f.h = NewHandler(ctx.DataDir, ctx.ProjectStore, nil, ctx.AIProvider, cfg.Knowledge.TopK)
 
 	if cfg.Knowledge.Enabled {
-		storeDir := filepath.Join(ctx.WorkDir, ".spec-designer", "knowledge-store")
+		storeDir := filepath.Join(ctx.DataDir, "knowledge-store")
 		embedCfg := knowledge.EmbeddingConfig{
 			Provider: cfg.Knowledge.EmbeddingProvider,
 			Model:    cfg.Knowledge.EmbeddingModel,

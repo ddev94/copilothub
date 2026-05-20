@@ -1,5 +1,4 @@
 import type {
-  RepoInfo,
   Config,
   AuthStatus,
   ClarifyResponse,
@@ -33,8 +32,16 @@ export const api = {
   hub: {
     features: () => request<{ features: FeatureManifest[] }>("/hub/features"),
   },
-  repo: {
-    info: () => request<RepoInfo>("/repo"),
+  projects: {
+    list: () => request<{ projects: LocalProject[] }>("/projects"),
+    get: (id: string) => request<LocalProject>(`/projects/${id}`),
+    create: (payload: { name: string }) =>
+      request<LocalProject>("/projects", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    delete: (id: string) =>
+      request<{ ok: boolean }>(`/projects/${id}`, { method: "DELETE" }),
   },
   clarify: (payload: { spec: string; mode: string; wikiContent?: string }) =>
     request<ClarifyResponse>(`${SPEC_CLARIFY}/clarify`, {
@@ -73,29 +80,29 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload),
       }),
-    getDocumentContent: (docId: string, projectPath: string) =>
+    getDocumentContent: (docId: string, projectId: string) =>
       request<{
         content: string;
         name: string;
         sourceFile: string;
         isMarkdown: boolean;
       }>(
-        `/features/wiki/knowledge/content?docId=${encodeURIComponent(docId)}&projectPath=${encodeURIComponent(projectPath)}`,
+        `/features/wiki/knowledge/content?docId=${encodeURIComponent(docId)}&projectId=${encodeURIComponent(projectId)}`,
       ),
-    listDocuments: (projectPath: string) =>
+    listDocuments: (projectId: string) =>
       request<{ documents: KnowledgeDocument[] }>(
-        `/features/wiki/knowledge/documents?projectPath=${encodeURIComponent(projectPath)}`,
+        `/features/wiki/knowledge/documents?projectId=${encodeURIComponent(projectId)}`,
       ),
     upload: async (
       files: File[],
-      projectPath: string,
+      projectId: string,
       replaceDuplicates: boolean,
     ) => {
       const form = new FormData();
       for (const file of files) {
         form.append("files", file);
       }
-      form.append("projectPath", projectPath);
+      form.append("projectId", projectId);
       form.append("replaceDuplicates", String(replaceDuplicates));
       const res = await fetch(`${BASE}/features/wiki/knowledge/upload`, {
         method: "POST",
@@ -107,30 +114,30 @@ export const api = {
       }
       return res.json() as Promise<KnowledgeUploadResponse>;
     },
-    deleteDocument: (id: string, projectPath: string) =>
+    deleteDocument: (id: string, projectId: string) =>
       request<{ ok: boolean }>(
-        `/features/wiki/knowledge/document/${id}?projectPath=${encodeURIComponent(projectPath)}`,
+        `/features/wiki/knowledge/document/${id}?projectId=${encodeURIComponent(projectId)}`,
         {
           method: "DELETE",
         },
       ),
-    listPending: (projectPath: string) =>
+    listPending: (projectId: string) =>
       request<{ documents: KnowledgeDocument[] }>(
-        `/features/wiki/knowledge/pending?projectPath=${encodeURIComponent(projectPath)}`,
+        `/features/wiki/knowledge/pending?projectId=${encodeURIComponent(projectId)}`,
       ),
-    approveDocument: (id: string, projectPath: string, approvedBy = "user") =>
+    approveDocument: (id: string, projectId: string, approvedBy = "user") =>
       request<{ ok: boolean }>(
-        `/features/wiki/knowledge/document/${id}/approve?projectPath=${encodeURIComponent(projectPath)}&approvedBy=${encodeURIComponent(approvedBy)}`,
+        `/features/wiki/knowledge/document/${id}/approve?projectId=${encodeURIComponent(projectId)}&approvedBy=${encodeURIComponent(approvedBy)}`,
         { method: "POST" },
       ),
-    rejectDocument: (id: string, projectPath: string) =>
+    rejectDocument: (id: string, projectId: string) =>
       request<{ ok: boolean }>(
-        `/features/wiki/knowledge/document/${id}/reject?projectPath=${encodeURIComponent(projectPath)}`,
+        `/features/wiki/knowledge/document/${id}/reject?projectId=${encodeURIComponent(projectId)}`,
         { method: "POST" },
       ),
-    approveAll: (projectPath: string, approvedBy = "user") =>
+    approveAll: (projectId: string, approvedBy = "user") =>
       request<{ ok: boolean; count: number }>(
-        `/features/wiki/knowledge/approve-all?projectPath=${encodeURIComponent(projectPath)}&approvedBy=${encodeURIComponent(approvedBy)}`,
+        `/features/wiki/knowledge/approve-all?projectId=${encodeURIComponent(projectId)}&approvedBy=${encodeURIComponent(approvedBy)}`,
         { method: "POST" },
       ),
   },

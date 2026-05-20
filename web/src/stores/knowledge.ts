@@ -15,8 +15,8 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
   const threads = ref<Record<string, WikiChatTurn[]>>({});
   const sessions = ref<Record<string, WikiSessionMeta>>({});
 
-  function threadKey(projectPath: string, sectionKey: string) {
-    return `${projectPath}::${sectionKey}`;
+  function threadKey(projectId: string, sectionKey: string) {
+    return `${projectId}::${sectionKey}`;
   }
 
   function persistThreads() {
@@ -36,9 +36,9 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
 
       for (const key of Object.keys(threads.value)) {
         if (sessions.value[key]) continue;
-        const [projectPath, sectionKey] = key.split("::");
-        if (!projectPath || !sectionKey) continue;
-        sessions.value[key] = { projectPath, sectionKey, title: sectionKey };
+        const [projectId, sectionKey] = key.split("::");
+        if (!projectId || !sectionKey) continue;
+        sessions.value[key] = { projectId, sectionKey, title: sectionKey };
       }
       persistSessions();
     } catch {
@@ -47,50 +47,60 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     }
   }
 
-  function ensureSession(projectPath: string, sectionKey: string) {
-    const key = threadKey(projectPath, sectionKey);
+  function ensureSession(projectId: string, sectionKey: string) {
+    const key = threadKey(projectId, sectionKey);
     if (!sessions.value[key]) {
-      sessions.value[key] = { projectPath, sectionKey, title: sectionKey };
+      sessions.value[key] = { projectId, sectionKey, title: sectionKey };
       persistSessions();
     }
   }
 
-  function getThread(projectPath: string, sectionKey: string): WikiChatTurn[] {
-    return threads.value[threadKey(projectPath, sectionKey)] || [];
+  function getThread(projectId: string, sectionKey: string): WikiChatTurn[] {
+    return threads.value[threadKey(projectId, sectionKey)] || [];
   }
 
-  function appendTurn(projectPath: string, sectionKey: string, turn: WikiChatTurn) {
-    const key = threadKey(projectPath, sectionKey);
+  function appendTurn(
+    projectId: string,
+    sectionKey: string,
+    turn: WikiChatTurn,
+  ) {
+    const key = threadKey(projectId, sectionKey);
     if (!threads.value[key]) threads.value[key] = [];
     threads.value[key].push(turn);
-    ensureSession(projectPath, sectionKey);
+    ensureSession(projectId, sectionKey);
     persistThreads();
   }
 
-  function clearThread(projectPath: string, sectionKey: string) {
-    delete threads.value[threadKey(projectPath, sectionKey)];
+  function clearThread(projectId: string, sectionKey: string) {
+    delete threads.value[threadKey(projectId, sectionKey)];
     persistThreads();
   }
 
-  function renameSession(projectPath: string, sectionKey: string, title: string) {
-    const key = threadKey(projectPath, sectionKey);
-    ensureSession(projectPath, sectionKey);
+  function renameSession(projectId: string, sectionKey: string, title: string) {
+    const key = threadKey(projectId, sectionKey);
+    ensureSession(projectId, sectionKey);
     sessions.value[key].title = title.trim() || sectionKey;
     persistSessions();
   }
 
-  function listSessions(projectPath: string): WikiSessionMeta[] {
-    return Object.values(sessions.value).filter((s) => s.projectPath === projectPath);
+  function listSessions(projectId: string): WikiSessionMeta[] {
+    return Object.values(sessions.value).filter(
+      (s) => s.projectId === projectId,
+    );
   }
 
-  async function loadDocuments(projectPath: string) {
-    if (!projectPath) { documents.value = []; pendingDocuments.value = []; return; }
+  async function loadDocuments(projectId: string) {
+    if (!projectId) {
+      documents.value = [];
+      pendingDocuments.value = [];
+      return;
+    }
     loading.value = true;
     error.value = null;
     try {
       const [docsRes, pendingRes] = await Promise.all([
-        api.wiki.listDocuments(projectPath),
-        api.wiki.listPending(projectPath),
+        api.wiki.listDocuments(projectId),
+        api.wiki.listPending(projectId),
       ]);
       documents.value = docsRes.documents;
       pendingDocuments.value = pendingRes.documents;
@@ -101,17 +111,21 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     }
   }
 
-  async function uploadFiles(files: File[], replaceDuplicates: boolean, projectPath: string) {
-    if (!projectPath || files.length === 0) return;
+  async function uploadFiles(
+    files: File[],
+    replaceDuplicates: boolean,
+    projectId: string,
+  ) {
+    if (!projectId || files.length === 0) return;
     uploading.value = true;
     error.value = null;
     try {
-      const res = await api.wiki.upload(files, projectPath, replaceDuplicates);
+      const res = await api.wiki.upload(files, projectId, replaceDuplicates);
       const failed = res.results.filter((r) => !r.ok);
       if (failed.length > 0) {
         error.value = `Upload failed: ${failed.map((f) => `${f.file}${f.message ? ` (${f.message})` : ""}`).join(", ")}`;
       }
-      await loadDocuments(projectPath);
+      await loadDocuments(projectId);
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Upload knowledge failed";
     } finally {
@@ -119,41 +133,41 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     }
   }
 
-  async function deleteDocument(id: string, projectPath: string) {
+  async function deleteDocument(id: string, projectId: string) {
     error.value = null;
     try {
-      await api.wiki.deleteDocument(id, projectPath);
-      await loadDocuments(projectPath);
+      await api.wiki.deleteDocument(id, projectId);
+      await loadDocuments(projectId);
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Delete knowledge failed";
     }
   }
 
-  async function approveDocument(id: string, projectPath: string) {
+  async function approveDocument(id: string, projectId: string) {
     error.value = null;
     try {
-      await api.wiki.approveDocument(id, projectPath);
-      await loadDocuments(projectPath);
+      await api.wiki.approveDocument(id, projectId);
+      await loadDocuments(projectId);
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Approve failed";
     }
   }
 
-  async function rejectDocument(id: string, projectPath: string) {
+  async function rejectDocument(id: string, projectId: string) {
     error.value = null;
     try {
-      await api.wiki.rejectDocument(id, projectPath);
-      await loadDocuments(projectPath);
+      await api.wiki.rejectDocument(id, projectId);
+      await loadDocuments(projectId);
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Reject failed";
     }
   }
 
-  async function approveAll(projectPath: string) {
+  async function approveAll(projectId: string) {
     error.value = null;
     try {
-      await api.wiki.approveAll(projectPath);
-      await loadDocuments(projectPath);
+      await api.wiki.approveAll(projectId);
+      await loadDocuments(projectId);
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Approve all failed";
     }

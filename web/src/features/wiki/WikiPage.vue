@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { marked, Renderer } from "marked";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -11,7 +11,7 @@ import xml from "highlight.js/lib/languages/xml";
 import "highlight.js/styles/github.css";
 import { Button } from "@/components/ui/button";
 import { useKnowledgeStore } from "@/stores/knowledge";
-import { useRepoStore } from "@/stores/repo";
+import { useProjectStore } from "@/stores/repo";
 import { api } from "@/api";
 import type { KnowledgeDocument } from "@/types";
 import WikiManageModal from "./WikiManageModal.vue";
@@ -73,9 +73,10 @@ function extractToc(markdown: string): TocEntry[] {
 // ── State ────────────────────────────────────────────────────────────────────
 const router = useRouter();
 const knowledge = useKnowledgeStore();
-const repoStore = useRepoStore();
+const projectStore = useProjectStore();
 
-const projectPath = computed(() => repoStore.info?.path ?? "");
+const route = useRoute();
+const projectId = computed(() => route.params.projectId as string);
 
 // Document viewer
 const selectedDoc = ref<KnowledgeDocument | null>(null);
@@ -104,7 +105,7 @@ async function selectDoc(doc: KnowledgeDocument) {
   docContent.value = "";
   docLoading.value = true;
   try {
-    const res = await api.wiki.getDocumentContent(doc.id, projectPath.value);
+    const res = await api.wiki.getDocumentContent(doc.id, projectId.value);
     docContent.value = res.content;
     docIsMarkdown.value = res.isMarkdown;
   } catch {
@@ -129,19 +130,23 @@ function onModalSelect(doc: KnowledgeDocument) {
 function navigateToChat() {
   const q = chatInput.value.trim();
   if (!q) return;
-  router.push({ path: "/features/wiki/chat", query: { q } });
+  router.push({
+    path: `/projects/${projectId.value}/features/wiki/chat`,
+    query: { q },
+  });
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 onMounted(async () => {
-  await repoStore.fetch();
-  if (projectPath.value) {
-    await knowledge.loadDocuments(projectPath.value);
+  await projectStore.fetch();
+  if (projectId.value) {
+    projectStore.selectProject(projectId.value);
+    await knowledge.loadDocuments(projectId.value);
     if (allDocs.value.length > 0) selectDoc(allDocs.value[0]);
   }
 });
 
-watch(projectPath, async (p) => {
+watch(projectId, async (p) => {
   if (p) {
     await knowledge.loadDocuments(p);
     if (allDocs.value.length > 0) selectDoc(allDocs.value[0]);
@@ -160,15 +165,15 @@ watch(projectPath, async (p) => {
       <div class="flex items-center gap-3">
         <button
           class="text-xs text-muted-foreground hover:text-foreground transition-colors"
-          @click="router.push('/')"
+          @click="router.push(`/projects/${projectId}`)"
         >
-          ← Hub
+          ← Project
         </button>
         <span class="text-sm font-semibold">Wiki</span>
         <span
-          v-if="repoStore.info"
+          v-if="projectStore.selectedProject"
           class="text-xs text-muted-foreground font-mono"
-          >{{ repoStore.info.name }}</span
+          >{{ projectStore.selectedProject.name }}</span
         >
       </div>
       <div class="flex items-center gap-2">
@@ -235,7 +240,7 @@ watch(projectPath, async (p) => {
                 size="sm"
                 class="h-6 text-[10px] px-2 flex-1"
                 :disabled="knowledge.pendingDocuments.length === 0"
-                @click="knowledge.approveAll(projectPath)"
+                @click="knowledge.approveAll(projectId)"
                 >Approve all</Button
               >
             </div>
@@ -364,7 +369,7 @@ watch(projectPath, async (p) => {
             v-model="chatInput"
             type="text"
             class="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-            :placeholder="`Ask about ${repoStore.info?.name ?? 'this project'}...`"
+            :placeholder="`Ask about ${projectStore.selectedProject?.name ?? 'this project'}...`"
             @keydown.enter="navigateToChat"
           />
           <button
@@ -381,7 +386,7 @@ watch(projectPath, async (p) => {
     <!-- ── Wiki Manage Modal ── -->
     <WikiManageModal
       v-model:open="showManageModal"
-      :project-path="projectPath"
+      :project-id="projectId"
       @select="onModalSelect"
     />
   </div>

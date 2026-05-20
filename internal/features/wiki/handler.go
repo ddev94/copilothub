@@ -4,7 +4,7 @@ import (
 	"context"
 	"copilothub/internal/ai"
 	"copilothub/internal/knowledge"
-	"crypto/sha256"
+	"copilothub/internal/project"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,7 +18,7 @@ import (
 
 const (
 	aiTimeout         = 5 * time.Minute
-	knowledgeFilesDir = ".spec-designer/knowledge/files"
+	knowledgeFilesDir = "knowledge/files"
 )
 
 var allowedExts = map[string]string{
@@ -28,16 +28,16 @@ var allowedExts = map[string]string{
 }
 
 type Handler struct {
-	rootPath   string
-	kc         atomic.Pointer[knowledge.Client]
-	aiProvider ai.Provider
-	topK       int
+	dataDir      string // ~/.copilothub
+	projectStore *project.Store
+	kc           atomic.Pointer[knowledge.Client]
+	aiProvider   ai.Provider
+	topK         int
 }
 
 type localProject struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	Path string `json:"path"`
 }
 
 type chatTurn struct {
@@ -46,11 +46,11 @@ type chatTurn struct {
 }
 
 type chatReq struct {
-	ProjectPath string     `json:"projectPath"`
-	SectionKey  string     `json:"sectionKey"`
-	Question    string     `json:"question"`
-	History     []chatTurn `json:"history"`
-	Intent      string     `json:"intent,omitempty"` // fact_lookup, as_is, to_be, relationship_query, summary
+	ProjectId  string     `json:"projectId"`
+	SectionKey string     `json:"sectionKey"`
+	Question   string     `json:"question"`
+	History    []chatTurn `json:"history"`
+	Intent     string     `json:"intent,omitempty"` // fact_lookup, as_is, to_be, relationship_query, summary
 }
 
 type chatResp struct {
@@ -59,11 +59,11 @@ type chatResp struct {
 	DetectedIntent string            `json:"detectedIntent,omitempty"`
 }
 
-func NewHandler(rootPath string, client *knowledge.Client, aiProvider ai.Provider, topK int) *Handler {
+func NewHandler(dataDir string, projectStore *project.Store, client *knowledge.Client, aiProvider ai.Provider, topK int) *Handler {
 	if topK <= 0 {
 		topK = 6
 	}
-	h := &Handler{rootPath: rootPath, aiProvider: aiProvider, topK: topK}
+	h := &Handler{dataDir: dataDir, projectStore: projectStore, aiProvider: aiProvider, topK: topK}
 	if client != nil {
 		h.kc.Store(client)
 	}
@@ -76,7 +76,7 @@ func (h *Handler) SetClient(c *knowledge.Client) {
 }
 
 func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
-	projects := h.localProjects()
+	projects := h.registeredProjects()
 	writeJSON(w, map[string]any{"projects": projects})
 }
 
@@ -95,8 +95,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "question is required", http.StatusBadRequest)
 		return
 	}
-	projectPath := h.resolveProjectPath(req.ProjectPath)
-	projectID := projectID(projectPath)
+	projectID := req.ProjectId
 	intent := strings.TrimSpace(req.Intent)
 	if intent == "" {
 		intent = detectIntent(req.Question)
@@ -125,10 +124,9 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	projectPath := h.resolveProjectPath(r.FormValue("projectPath"))
-	projectID := projectID(projectPath)
+	pid := r.FormValue("projectId")
 	replaceDuplicates := strings.EqualFold(strings.TrimSpace(r.FormValue("replaceDuplicates")), "true")
-	destDir := filepath.Join(projectPath, knowledgeFilesDir)
+	destDir := h.projectFilesDir(pid)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		writeError(w, "failed to create storage dir: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -181,10 +179,10 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 
 		// If replacing, delete old document from vector store first
 		if fileExists && replaceDuplicates {
-			docs, _ := c.ListDocuments(r.Context(), projectID)
+			docs, _ := c.ListDocuments(r.Context(), pid)
 			for _, doc := range docs {
 				if doc.Name == header.Filename {
-					_ = c.DeleteDocument(r.Context(), projectID, doc.ID)
+					_ = c.DeleteDocument(r.Context(), pid, doc.ID)
 					break
 				}
 			}
@@ -205,7 +203,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		dst.Close()
 		file.Close()
 
-		if err := c.Ingest(r.Context(), projectID, destPath, header.Filename, contentType); err != nil {
+		if err := c.Ingest(r.Context(), pid, destPath, header.Filename, contentType); err != nil {
 			results = append(results, uploadResult{File: header.Filename, OK: false, Message: "knowledge ingest failed"})
 			continue
 		}
@@ -221,8 +219,8 @@ func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"documents": []knowledge.Document{}})
 		return
 	}
-	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
-	docs, err := c.ListDocuments(r.Context(), projectID(projectPath))
+	pid := r.URL.Query().Get("projectId")
+	docs, err := c.ListDocuments(r.Context(), pid)
 	if err != nil {
 		writeError(w, "knowledge service unavailable: "+err.Error(), http.StatusBadGateway)
 		return
@@ -237,8 +235,7 @@ func (h *Handler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	docID := r.PathValue("id")
-	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
-	pid := projectID(projectPath)
+	pid := r.URL.Query().Get("projectId")
 
 	// Look up the source file name before deleting metadata
 	docs, _ := c.ListDocuments(r.Context(), pid)
@@ -258,7 +255,7 @@ func (h *Handler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
 
 	// Remove the physical source file from disk
 	if sourceFile != "" {
-		diskPath := filepath.Join(projectPath, knowledgeFilesDir, sourceFile)
+		diskPath := filepath.Join(h.projectFilesDir(pid), sourceFile)
 		_ = os.Remove(diskPath)
 	}
 
@@ -270,8 +267,8 @@ func (h *Handler) ListPending(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"documents": []knowledge.Document{}})
 		return
 	}
-	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
-	docs, err := h.kc.Load().PendingDocuments(r.Context(), projectID(projectPath))
+	pid := r.URL.Query().Get("projectId")
+	docs, err := h.kc.Load().PendingDocuments(r.Context(), pid)
 	if err != nil {
 		writeError(w, "failed to list pending: "+err.Error(), http.StatusBadGateway)
 		return
@@ -285,12 +282,12 @@ func (h *Handler) ApproveDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	docID := r.PathValue("id")
-	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
+	pid := r.URL.Query().Get("projectId")
 	approvedBy := r.URL.Query().Get("approvedBy")
 	if approvedBy == "" {
 		approvedBy = "user"
 	}
-	if err := h.kc.Load().ApproveDocument(r.Context(), projectID(projectPath), docID, approvedBy); err != nil {
+	if err := h.kc.Load().ApproveDocument(r.Context(), pid, docID, approvedBy); err != nil {
 		writeError(w, "approve failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -303,8 +300,8 @@ func (h *Handler) RejectDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	docID := r.PathValue("id")
-	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
-	if err := h.kc.Load().RejectDocument(r.Context(), projectID(projectPath), docID); err != nil {
+	pid := r.URL.Query().Get("projectId")
+	if err := h.kc.Load().RejectDocument(r.Context(), pid, docID); err != nil {
 		writeError(w, "reject failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -316,12 +313,12 @@ func (h *Handler) ApproveAll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
 		return
 	}
-	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
+	pid := r.URL.Query().Get("projectId")
 	approvedBy := r.URL.Query().Get("approvedBy")
 	if approvedBy == "" {
 		approvedBy = "user"
 	}
-	count, err := h.kc.Load().ApproveAllPending(r.Context(), projectID(projectPath), approvedBy)
+	count, err := h.kc.Load().ApproveAllPending(r.Context(), pid, approvedBy)
 	if err != nil {
 		writeError(w, "approve all failed: "+err.Error(), http.StatusBadGateway)
 		return
@@ -329,45 +326,28 @@ func (h *Handler) ApproveAll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "count": count})
 }
 
-func (h *Handler) localProjects() []localProject {
-	parent := filepath.Dir(h.rootPath)
-	entries, err := os.ReadDir(parent)
+func (h *Handler) registeredProjects() []localProject {
+	if h.projectStore == nil {
+		return []localProject{}
+	}
+	projects, err := h.projectStore.List()
 	if err != nil {
-		return []localProject{{ID: projectID(h.rootPath), Name: filepath.Base(h.rootPath), Path: h.rootPath}}
+		return []localProject{}
 	}
-	projects := make([]localProject, 0, len(entries)+1)
-	projects = append(projects, localProject{ID: projectID(h.rootPath), Name: filepath.Base(h.rootPath), Path: h.rootPath})
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		p := filepath.Join(parent, entry.Name())
-		if p == h.rootPath {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(p, ".git")); err != nil {
-			continue
-		}
-		projects = append(projects, localProject{ID: projectID(p), Name: entry.Name(), Path: p})
+	result := make([]localProject, 0, len(projects))
+	for _, p := range projects {
+		result = append(result, localProject{ID: p.ID, Name: p.Name})
 	}
-	return projects
+	return result
 }
 
-func (h *Handler) resolveProjectPath(projectPath string) string {
-	if strings.TrimSpace(projectPath) == "" {
-		return h.rootPath
+// projectFilesDir returns the directory for storing knowledge files for a project.
+// Files are stored in ~/.copilothub/projects/{projectID}/knowledge/files/
+func (h *Handler) projectFilesDir(pid string) string {
+	if h.projectStore != nil {
+		return filepath.Join(h.projectStore.ProjectDir(pid), knowledgeFilesDir)
 	}
-	for _, p := range h.localProjects() {
-		if p.Path == projectPath {
-			return p.Path
-		}
-	}
-	return h.rootPath
-}
-
-func projectID(path string) string {
-	sum := sha256.Sum256([]byte(path))
-	return fmt.Sprintf("%x", sum[:8])
+	return filepath.Join(h.dataDir, "projects", pid, knowledgeFilesDir)
 }
 
 func (h *Handler) retrieveRelatedChunks(ctx context.Context, projectID, question string) ([]knowledge.Chunk, error) {
@@ -577,11 +557,11 @@ func (h *Handler) GetDocumentContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	docID := r.URL.Query().Get("docId")
-	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
+	pid := r.URL.Query().Get("projectId")
 	ctx := r.Context()
 
-	allDocs, _ := c.ListDocuments(ctx, projectID(projectPath))
-	pendingDocs, _ := c.PendingDocuments(ctx, projectID(projectPath))
+	allDocs, _ := c.ListDocuments(ctx, pid)
+	pendingDocs, _ := c.PendingDocuments(ctx, pid)
 
 	var sourceFile, name string
 	for _, d := range append(allDocs, pendingDocs...) {
@@ -596,8 +576,8 @@ func (h *Handler) GetDocumentContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath := filepath.Join(projectPath, knowledgeFilesDir, sourceFile)
-	content, err := knowledge.ReadFileContent(filePath, sourceFile)
+	fp := filepath.Join(h.projectFilesDir(pid), sourceFile)
+	content, err := knowledge.ReadFileContent(fp, sourceFile)
 	if err != nil {
 		writeError(w, "cannot read file: "+err.Error(), http.StatusInternalServerError)
 		return

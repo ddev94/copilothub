@@ -8,18 +8,21 @@ import (
 	"copilothub/internal/handler"
 	"copilothub/internal/hub"
 	"copilothub/internal/knowledge"
+	"copilothub/internal/project"
 	"encoding/json"
 	"fmt"
 	"net/http"
 )
 
-func setupRoutes(mux *http.ServeMux, repoPath string) {
-	cfgStore := config.NewStore(repoPath)
+func setupRoutes(mux *http.ServeMux, dataDir string) {
+	cfgStore := config.NewStore(dataDir)
 	cfg, _ := cfgStore.Load()
+	projStore := project.NewStore(dataDir)
 
 	fmt.Printf("Using AI provider: %s, model: %s\n", cfg.AI.Provider, cfg.AI.Model)
+	fmt.Printf("Data directory: %s\n", dataDir)
 
-	aiProvider := ai.NewProvider(cfg.AI.Provider, cfg.AI.Token, cfg.AI.Model, cfg.AI.BaseURL, repoPath)
+	aiProvider := ai.NewProvider(cfg.AI.Provider, cfg.AI.Token, cfg.AI.Model, cfg.AI.BaseURL, dataDir)
 
 	// Build registry with built-in features
 	registry := hub.NewRegistry()
@@ -34,20 +37,26 @@ func setupRoutes(mux *http.ServeMux, repoPath string) {
 
 	// Mount all feature routes under /api/features/{id}/
 	registry.RegisterRoutes(mux, hub.FeatureContext{
-		WorkDir:    repoPath,
-		AIProvider: aiProvider,
-		Config:     cfgStore,
+		DataDir:      dataDir,
+		AIProvider:   aiProvider,
+		Config:       cfgStore,
+		ProjectStore: projStore,
 	})
 
 	// Hub-level routes
 	hubH := handler.NewHubHandler(registry)
-	repoH := handler.NewRepoHandler(repoPath)
-	cfgH := handler.NewConfigHandler(repoPath)
+	cfgH := handler.NewConfigHandler(dataDir)
+	projH := handler.NewProjectHandler(projStore)
 
 	mux.HandleFunc("GET /api/hub/features", hubH.ListFeatures)
-	mux.HandleFunc("GET /api/repo", repoH.Info)
 	mux.HandleFunc("GET /api/config", cfgH.Get)
 	mux.HandleFunc("PUT /api/config", cfgH.Save)
+
+	// Project routes
+	mux.HandleFunc("GET /api/projects", projH.List)
+	mux.HandleFunc("GET /api/projects/{id}", projH.Get)
+	mux.HandleFunc("POST /api/projects", projH.Create)
+	mux.HandleFunc("DELETE /api/projects/{id}", projH.Delete)
 
 	mux.HandleFunc("GET /api/auth/status", func(w http.ResponseWriter, r *http.Request) {
 		cliPath := ai.FindCLI()

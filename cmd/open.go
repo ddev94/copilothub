@@ -1,11 +1,10 @@
 package cmd
 
 import (
+	"copilothub/internal/project"
 	"copilothub/internal/server"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"time"
 
@@ -14,37 +13,23 @@ import (
 
 func newOpenCommand() *cobra.Command {
 	var port int
-	var workDir string
 	cmd := &cobra.Command{
 		Use:   "open",
-		Short: "Start the spec clarify UI for the current repository",
+		Short: "Start the AI Hub server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var repoPath string
-			if workDir != "" {
-				repoPath = workDir
-			} else {
-				var err error
-				repoPath, err = os.Getwd()
-				if err != nil {
-					return err
-				}
-			}
-			var err error
-			repoPath, err = filepath.Abs(repoPath)
-			if err != nil {
-				return err
-			}
+			dataDir := project.DefaultBaseDir()
+
 			url := fmt.Sprintf("http://localhost:%d", port)
-			fmt.Printf("spec-clarify running at %s\n", url)
+			fmt.Printf("copilothub running at %s\n", url)
+			fmt.Printf("data directory: %s\n", dataDir)
 			go func() {
 				time.Sleep(500 * time.Millisecond)
 				openBrowser(url)
 			}()
-			return server.Start(repoPath, fmt.Sprintf(":%d", port))
+			return server.Start(dataDir, fmt.Sprintf(":%d", port))
 		},
 	}
 	cmd.Flags().IntVarP(&port, "port", "p", 3000, "Port to listen on")
-	cmd.Flags().StringVarP(&workDir, "workdir", "w", "", "Working directory (default: current directory)")
 	return cmd
 }
 

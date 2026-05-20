@@ -6,32 +6,20 @@ export const router = createRouter({
     { path: "/", component: () => import("@/hub/HubHome.vue") },
     { path: "/settings", component: () => import("@/pages/SettingsPage.vue") },
     {
-      path: "/features/spec-clarify",
+      path: "/projects/:projectId",
+      component: () => import("@/hub/ProjectPage.vue"),
+    },
+    {
+      path: "/projects/:projectId/features/spec-clarify",
       component: () => import("@/features/spec-clarify/EditorPage.vue"),
     },
     {
-      path: "/features/spec-clarify/:pathMatch(.*)*",
-      component: () => import("@/features/spec-clarify/EditorPage.vue"),
-    },
-    {
-      path: "/features/spec-designer",
-      component: () => import("@/features/spec-clarify/EditorPage.vue"),
-    },
-    {
-      path: "/features/spec-designer/:pathMatch(.*)*",
-      component: () => import("@/features/spec-clarify/EditorPage.vue"),
-    },
-    {
-      path: "/features/wiki",
+      path: "/projects/:projectId/features/wiki",
       component: () => import("@/features/wiki/WikiPage.vue"),
     },
     {
-      path: "/features/wiki/chat",
+      path: "/projects/:projectId/features/wiki/chat",
       component: () => import("@/features/wiki/WikiChatPage.vue"),
-    },
-    {
-      path: "/features/wiki/:pathMatch(.*)*",
-      component: () => import("@/features/wiki/WikiPage.vue"),
     },
   ],
 });

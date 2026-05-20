@@ -4,9 +4,9 @@ import (
 	"net/http"
 )
 
-func Start(repoPath, addr string) error {
+func Start(dataDir, addr string) error {
 	mux := http.NewServeMux()
-	setupRoutes(mux, repoPath)
+	setupRoutes(mux, dataDir)
 	mux.Handle("/", corsMiddleware(frontendHandler()))
 	return http.ListenAndServe(addr, corsMiddleware(mux))
 }

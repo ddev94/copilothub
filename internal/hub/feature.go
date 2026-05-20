@@ -3,6 +3,7 @@ package hub
 import (
 	"copilothub/internal/ai"
 	"copilothub/internal/config"
+	"copilothub/internal/project"
 	"net/http"
 )
 
@@ -14,9 +15,11 @@ type Feature interface {
 }
 
 type FeatureContext struct {
-	WorkDir    string
-	AIProvider ai.Provider
-	Config     *config.Store
+	WorkDir      string // kept for backward compat (may be empty)
+	DataDir      string // ~/.copilothub — central data directory
+	AIProvider   ai.Provider
+	Config       *config.Store
+	ProjectStore *project.Store
 }
 
 type Manifest struct {
