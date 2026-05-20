@@ -71,9 +71,8 @@ type Chunk struct {
 	Score   float64 `json:"score"`
 }
 
-// NewClient opens (or creates) a knowledge store at storeDir.
-// Requires Ollama running at localhost:11434 with the all-minilm model pulled.
-func NewClient(storeDir string) (*Client, error) {
+// NewClient opens (or creates) a knowledge store at storeDir using the given embedding config.
+func NewClient(storeDir string, embedCfg EmbeddingConfig) (*Client, error) {
 	if err := os.MkdirAll(storeDir, 0755); err != nil {
 		return nil, fmt.Errorf("knowledge store: %w", err)
 	}
@@ -91,7 +90,7 @@ func NewClient(storeDir string) (*Client, error) {
 		_ = json.Unmarshal(data, &ms.docs)
 	}
 
-	embed, err := newEmbeddingFunc(defaultModelsDir())
+	embed, err := NewEmbeddingFunc(embedCfg, defaultModelsDir())
 	if err != nil {
 		return nil, fmt.Errorf("embedding model: %w", err)
 	}

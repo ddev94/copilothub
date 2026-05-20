@@ -11,6 +11,7 @@ import type {
   LocalProject,
   WikiChatRequest,
   WikiChatResponse,
+  EmbeddingStatus,
 } from "@/types";
 
 const BASE = "/api";
@@ -65,6 +66,10 @@ export const api = {
   },
   auth: {
     status: () => request<AuthStatus>("/auth/status"),
+  },
+  embedding: {
+    check: () => request<EmbeddingStatus>("/embedding/check"),
+    stream: () => new EventSource(`${BASE}/embedding/stream`),
   },
   wiki: {
     projects: () => request<{ projects: LocalProject[] }>("/features/wiki/projects"),

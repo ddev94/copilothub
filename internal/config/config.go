@@ -17,13 +17,19 @@ type Config struct {
 }
 
 type AIConfig struct {
-	Token string `json:"token"` // optional override; uses gh CLI auth if empty
-	Model string `json:"model"`
+	Provider string `json:"provider"` // "copilot" | "openai" | "anthropic"
+	Token    string `json:"token"`    // GitHub token (copilot) or API key (openai/anthropic)
+	Model    string `json:"model"`
+	BaseURL  string `json:"baseURL"` // custom OpenAI-compatible base URL
 }
 
 type KnowledgeConfig struct {
-	Enabled bool `json:"enabled"`
-	TopK    int  `json:"topK"`
+	Enabled           bool   `json:"enabled"`
+	TopK              int    `json:"topK"`
+	EmbeddingProvider string `json:"embeddingProvider"` // "cybertron" | "openai" | "ollama"
+	EmbeddingModel    string `json:"embeddingModel"`
+	EmbeddingKey      string `json:"embeddingKey"`
+	EmbeddingURL      string `json:"embeddingURL"`
 }
 
 type Store struct {
@@ -68,10 +74,14 @@ func (s *Store) Save(cfg *Config) error {
 
 func (s *Store) defaults() *Config {
 	return &Config{
-		AI: AIConfig{Token: os.Getenv("GITHUB_TOKEN")},
+		AI: AIConfig{
+			Provider: "copilot",
+			Token:    os.Getenv("GITHUB_TOKEN"),
+		},
 		Knowledge: KnowledgeConfig{
-			Enabled: true,
-			TopK:    6,
+			Enabled:           true,
+			TopK:              6,
+			EmbeddingProvider: "cybertron",
 		},
 	}
 }

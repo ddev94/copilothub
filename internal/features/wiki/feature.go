@@ -34,18 +34,28 @@ func (f *Feature) Manifest() hub.Manifest {
 func (f *Feature) Init(ctx hub.FeatureContext) error {
 	cfg, _ := ctx.Config.Load()
 
-	var knowledgeClient *knowledge.Client
+	// Create handler immediately (client starts nil — endpoints return 503 until ready)
+	f.h = NewHandler(ctx.WorkDir, nil, ctx.AIProvider, cfg.Knowledge.TopK)
+
 	if cfg.Knowledge.Enabled {
 		storeDir := filepath.Join(ctx.WorkDir, ".spec-designer", "knowledge-store")
-		client, err := knowledge.NewClient(storeDir)
-		if err != nil {
-			fmt.Printf("[knowledge] store failed to initialise: %v — knowledge disabled\n", err)
-		} else {
-			knowledgeClient = client
+		embedCfg := knowledge.EmbeddingConfig{
+			Provider: cfg.Knowledge.EmbeddingProvider,
+			Model:    cfg.Knowledge.EmbeddingModel,
+			Key:      cfg.Knowledge.EmbeddingKey,
+			URL:      cfg.Knowledge.EmbeddingURL,
 		}
+		go func() {
+			client, err := knowledge.NewClient(storeDir, embedCfg)
+			if err != nil {
+				fmt.Printf("[wiki] knowledge store failed: %v\n", err)
+				return
+			}
+			f.h.SetClient(client)
+			fmt.Println("[wiki] knowledge store ready")
+		}()
 	}
 
-	f.h = NewHandler(ctx.WorkDir, knowledgeClient, ctx.AIProvider, cfg.Knowledge.TopK)
 	return nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"copilothub/internal/features/wiki"
 	"copilothub/internal/handler"
 	"copilothub/internal/hub"
+	"copilothub/internal/knowledge"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,9 +17,9 @@ func setupRoutes(mux *http.ServeMux, repoPath string) {
 	cfgStore := config.NewStore(repoPath)
 	cfg, _ := cfgStore.Load()
 
-	fmt.Printf("Using AI model: %s\n", cfg.AI.Model)
+	fmt.Printf("Using AI provider: %s, model: %s\n", cfg.AI.Provider, cfg.AI.Model)
 
-	aiProvider := ai.NewSDKProvider(cfg.AI.Token, cfg.AI.Model, repoPath)
+	aiProvider := ai.NewProvider(cfg.AI.Provider, cfg.AI.Token, cfg.AI.Model, cfg.AI.BaseURL, repoPath)
 
 	// Build registry with built-in features
 	registry := hub.NewRegistry()
@@ -55,5 +56,52 @@ func setupRoutes(mux *http.ServeMux, repoPath string) {
 			"cliFound": cliPath != "",
 			"cliPath":  cliPath,
 		})
+	})
+
+	// Embedding model download progress
+	mux.HandleFunc("GET /api/embedding/check", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(knowledge.EmbedProgress.Get()) //nolint:errcheck
+	})
+
+	mux.HandleFunc("GET /api/embedding/stream", func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		send := func(p knowledge.ModelProgress) {
+			data, _ := json.Marshal(p)
+			fmt.Fprintf(w, "data: %s\n\n", data) //nolint:errcheck
+			flusher.Flush()
+		}
+
+		p := knowledge.EmbedProgress.Get()
+		send(p)
+		if p.State == knowledge.ModelStateReady || p.State == knowledge.ModelStateError {
+			return
+		}
+
+		ch := knowledge.EmbedProgress.Subscribe()
+		defer knowledge.EmbedProgress.Unsubscribe(ch)
+
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case prog, ok := <-ch:
+				if !ok {
+					return
+				}
+				send(prog)
+				if prog.State == knowledge.ModelStateReady || prog.State == knowledge.ModelStateError {
+					return
+				}
+			}
+		}
 	})
 }

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,7 +29,7 @@ var allowedExts = map[string]string{
 
 type Handler struct {
 	rootPath   string
-	client     *knowledge.Client
+	kc         atomic.Pointer[knowledge.Client]
 	aiProvider ai.Provider
 	topK       int
 }
@@ -62,7 +63,16 @@ func NewHandler(rootPath string, client *knowledge.Client, aiProvider ai.Provide
 	if topK <= 0 {
 		topK = 6
 	}
-	return &Handler{rootPath: rootPath, client: client, aiProvider: aiProvider, topK: topK}
+	h := &Handler{rootPath: rootPath, aiProvider: aiProvider, topK: topK}
+	if client != nil {
+		h.kc.Store(client)
+	}
+	return h
+}
+
+// SetClient sets the knowledge client after async initialization completes.
+func (h *Handler) SetClient(c *knowledge.Client) {
+	h.kc.Store(c)
 }
 
 func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
@@ -71,8 +81,8 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
-	if h.client == nil {
-		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
+	if h.kc.Load() == nil {
+		writeError(w, "knowledge store đang khởi tạo, vui lòng thử lại sau", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -105,8 +115,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
-	if h.client == nil {
-		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
+	c := h.kc.Load()
+	if c == nil {
+		writeError(w, "knowledge store đang khởi tạo, vui lòng thử lại sau", http.StatusServiceUnavailable)
 		return
 	}
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
@@ -170,10 +181,10 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 
 		// If replacing, delete old document from vector store first
 		if fileExists && replaceDuplicates {
-			docs, _ := h.client.ListDocuments(r.Context(), projectID)
+			docs, _ := c.ListDocuments(r.Context(), projectID)
 			for _, doc := range docs {
 				if doc.Name == header.Filename {
-					_ = h.client.DeleteDocument(r.Context(), projectID, doc.ID)
+					_ = c.DeleteDocument(r.Context(), projectID, doc.ID)
 					break
 				}
 			}
@@ -194,7 +205,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		dst.Close()
 		file.Close()
 
-		if err := h.client.Ingest(r.Context(), projectID, destPath, header.Filename, contentType); err != nil {
+		if err := c.Ingest(r.Context(), projectID, destPath, header.Filename, contentType); err != nil {
 			results = append(results, uploadResult{File: header.Filename, OK: false, Message: "knowledge ingest failed"})
 			continue
 		}
@@ -205,12 +216,13 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
-	if h.client == nil {
+	c := h.kc.Load()
+	if c == nil {
 		writeJSON(w, map[string]any{"documents": []knowledge.Document{}})
 		return
 	}
 	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
-	docs, err := h.client.ListDocuments(r.Context(), projectID(projectPath))
+	docs, err := c.ListDocuments(r.Context(), projectID(projectPath))
 	if err != nil {
 		writeError(w, "knowledge service unavailable: "+err.Error(), http.StatusBadGateway)
 		return
@@ -219,13 +231,14 @@ func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
-	if h.client == nil {
-		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
+	c := h.kc.Load()
+	if c == nil {
+		writeError(w, "knowledge store đang khởi tạo", http.StatusServiceUnavailable)
 		return
 	}
 	docID := r.PathValue("id")
 	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
-	if err := h.client.DeleteDocument(r.Context(), projectID(projectPath), docID); err != nil {
+	if err := c.DeleteDocument(r.Context(), projectID(projectPath), docID); err != nil {
 		writeError(w, "delete failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -338,7 +351,11 @@ func projectID(path string) string {
 }
 
 func (h *Handler) retrieveRelatedChunks(ctx context.Context, projectID, question string) ([]knowledge.Chunk, error) {
-	mainChunks, err := h.client.Retrieve(ctx, projectID, question, h.topK)
+	c := h.kc.Load()
+	if c == nil {
+		return nil, fmt.Errorf("knowledge store chưa sẵn sàng")
+	}
+	mainChunks, err := c.Retrieve(ctx, projectID, question, h.topK)
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +365,7 @@ func (h *Handler) retrieveRelatedChunks(ctx context.Context, projectID, question
 	var relatedChunks []knowledge.Chunk
 	if len(words) > 2 {
 		subQuery := strings.Join(words[:len(words)/2], " ")
-		if sub, err := h.client.Retrieve(ctx, projectID, subQuery, h.topK/2); err == nil {
+		if sub, err := c.Retrieve(ctx, projectID, subQuery, h.topK/2); err == nil {
 			relatedChunks = append(relatedChunks, sub...)
 		}
 	}

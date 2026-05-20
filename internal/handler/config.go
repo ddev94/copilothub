@@ -14,7 +14,7 @@ func NewConfigHandler(repoPath string) *ConfigHandler {
 	return &ConfigHandler{store: config.NewStore(repoPath)}
 }
 
-// Get returns config with token masked for security.
+// Get returns config with sensitive fields masked for security.
 func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 	cfg, err := h.store.Load()
 	if err != nil {
@@ -24,6 +24,9 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 	safe := *cfg
 	if safe.AI.Token != "" {
 		safe.AI.Token = "***"
+	}
+	if safe.Knowledge.EmbeddingKey != "" {
+		safe.Knowledge.EmbeddingKey = "***"
 	}
 	writeJSON(w, safe)
 }

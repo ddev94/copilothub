@@ -10,7 +10,6 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import ConfigDialog from "./ConfigDialog.vue";
 import type { ClarifyResponse, LocalProject } from "@/types";
 
 const router = useRouter();
@@ -245,7 +244,6 @@ function categoryLabel(category: string) {
           >
             {{ repoStore.info.name }}
           </p>
-          <ConfigDialog />
         </div>
       </div>
 

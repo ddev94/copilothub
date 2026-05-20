@@ -15,14 +15,29 @@ export interface RepoInfo {
 }
 
 export interface AIConfig {
+  provider: string; // "copilot" | "openai" | "anthropic"
   token: string;
   model: string;
+  baseURL: string;
 }
 
 export interface KnowledgeConfig {
   enabled: boolean;
-  serviceUrl: string;
   topK: number;
+  embeddingProvider: string; // "cybertron" | "openai" | "ollama"
+  embeddingModel: string;
+  embeddingKey: string;
+  embeddingURL: string;
+}
+
+export type EmbeddingState = "unknown" | "ready" | "downloading" | "error";
+
+export interface EmbeddingStatus {
+  state: EmbeddingState;
+  message: string;
+  bytes: number;
+  total: number;
+  percent: number;
 }
 
 export interface Config {

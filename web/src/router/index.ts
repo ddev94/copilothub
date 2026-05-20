@@ -4,6 +4,7 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: "/", component: () => import("@/hub/HubHome.vue") },
+    { path: "/settings", component: () => import("@/pages/SettingsPage.vue") },
     {
       path: "/features/spec-clarify",
       component: () => import("@/features/spec-clarify/EditorPage.vue"),
