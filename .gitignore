@@ -3,3 +3,4 @@ node_modules/
 .spec-clarify/
 bin/
 .DS_Store
+.spec-designer/

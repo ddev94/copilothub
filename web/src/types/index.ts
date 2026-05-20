@@ -136,11 +136,6 @@ export interface ClarifyResponse {
   summary: string;
 }
 
-export interface WikiFetchResponse {
-  content: string;
-  title: string;
-}
-
 export interface RefineResponse {
   refinedSpec: string;
 }

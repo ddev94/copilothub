@@ -6,7 +6,6 @@ import (
 	"copilothub/internal/repo"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -286,56 +285,6 @@ func (h *Handler) Refine(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, refineResponse{RefinedSpec: strings.TrimSpace(result)})
 }
 
-// === Fetch Wiki ===
-
-type fetchWikiReq struct {
-	URL string `json:"url"`
-}
-
-type fetchWikiResponse struct {
-	Content string `json:"content"`
-	Title   string `json:"title"`
-}
-
-func (h *Handler) FetchWiki(w http.ResponseWriter, r *http.Request) {
-	var req fetchWikiReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if strings.TrimSpace(req.URL) == "" {
-		writeError(w, "url is required", http.StatusBadRequest)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, req.URL, nil)
-	if err != nil {
-		writeError(w, "invalid URL: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	httpReq.Header.Set("User-Agent", "spec-clarify/1.0")
-	httpReq.Header.Set("Accept", "text/html,text/plain,application/xhtml+xml")
-
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		writeError(w, "failed to fetch URL: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 500_000))
-	if err != nil {
-		writeError(w, "failed to read response: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	content := stripHTMLTags(string(body))
-	writeJSON(w, fetchWikiResponse{Content: content, Title: req.URL})
-}
-
 // === Helpers ===
 
 func appendRepoContext(b *strings.Builder, info *repo.Info) {
@@ -348,30 +297,6 @@ func appendRepoContext(b *strings.Builder, info *repo.Info) {
 		b.WriteString(repo.FormatTree(info.FileTree, 0))
 		b.WriteString("\n")
 	}
-}
-
-func stripHTMLTags(s string) string {
-	var b strings.Builder
-	inTag := false
-	for _, ch := range s {
-		switch {
-		case ch == '<':
-			inTag = true
-		case ch == '>':
-			inTag = false
-			b.WriteRune(' ')
-		case !inTag:
-			b.WriteRune(ch)
-		}
-	}
-	result := b.String()
-	for strings.Contains(result, "  ") {
-		result = strings.ReplaceAll(result, "  ", " ")
-	}
-	for strings.Contains(result, "\n\n\n") {
-		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
-	}
-	return strings.TrimSpace(result)
 }
 
 func cleanJSON(s string) string {

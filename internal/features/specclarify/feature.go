@@ -36,5 +36,4 @@ func (f *Feature) Init(ctx hub.FeatureContext) error {
 func (f *Feature) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /clarify", f.h.Clarify)
 	mux.HandleFunc("POST /refine", f.h.Refine)
-	mux.HandleFunc("POST /fetch-wiki", f.h.FetchWiki)
 }

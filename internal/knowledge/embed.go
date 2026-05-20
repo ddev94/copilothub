@@ -61,7 +61,7 @@ func newOllamaEmbeddingFunc(model, baseURL string) (chromem.EmbeddingFunc, error
 // newCybertronEmbeddingFunc loads all-MiniLM-L6-v2 and broadcasts download progress.
 func newCybertronEmbeddingFunc(modelsDir string) (chromem.EmbeddingFunc, error) {
 	modelDir := filepath.Join(modelsDir, filepath.FromSlash("sentence-transformers/all-MiniLM-L6-v2"))
-
+	fmt.Printf("Loading embedding model from %s...\n", modelDir)
 	if !isModelReady(modelDir) {
 		EmbedProgress.Set(ModelProgress{
 			State:   ModelStateDownloading,

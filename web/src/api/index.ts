@@ -3,7 +3,6 @@ import type {
   Config,
   AuthStatus,
   ClarifyResponse,
-  WikiFetchResponse,
   RefineResponse,
   FeatureManifest,
   KnowledgeDocument,
@@ -51,11 +50,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  fetchWiki: (url: string) =>
-    request<WikiFetchResponse>(`${SPEC_CLARIFY}/fetch-wiki`, {
-      method: "POST",
-      body: JSON.stringify({ url }),
-    }),
   config: {
     get: () => request<Config>("/config"),
     save: (cfg: Config) =>
@@ -72,21 +66,31 @@ export const api = {
     stream: () => new EventSource(`${BASE}/embedding/stream`),
   },
   wiki: {
-    projects: () => request<{ projects: LocalProject[] }>("/features/wiki/projects"),
+    projects: () =>
+      request<{ projects: LocalProject[] }>("/features/wiki/projects"),
     chat: (payload: WikiChatRequest) =>
       request<WikiChatResponse>("/features/wiki/chat", {
         method: "POST",
         body: JSON.stringify(payload),
       }),
     getDocumentContent: (docId: string, projectPath: string) =>
-      request<{ content: string; name: string; sourceFile: string; isMarkdown: boolean }>(
+      request<{
+        content: string;
+        name: string;
+        sourceFile: string;
+        isMarkdown: boolean;
+      }>(
         `/features/wiki/knowledge/content?docId=${encodeURIComponent(docId)}&projectPath=${encodeURIComponent(projectPath)}`,
       ),
     listDocuments: (projectPath: string) =>
       request<{ documents: KnowledgeDocument[] }>(
         `/features/wiki/knowledge/documents?projectPath=${encodeURIComponent(projectPath)}`,
       ),
-    upload: async (files: File[], projectPath: string, replaceDuplicates: boolean) => {
+    upload: async (
+      files: File[],
+      projectPath: string,
+      replaceDuplicates: boolean,
+    ) => {
       const form = new FormData();
       for (const file of files) {
         form.append("files", file);

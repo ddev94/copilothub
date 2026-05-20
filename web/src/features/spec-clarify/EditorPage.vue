@@ -1,16 +1,15 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed } from "vue";
 import { useRouter } from "vue-router";
 import { useRepoStore } from "@/stores/repo";
 import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { ClarifyResponse, LocalProject } from "@/types";
+import type { ClarifyResponse } from "@/types";
 
 const router = useRouter();
 const repoStore = useRepoStore();
@@ -22,16 +21,7 @@ type ClarifyMode = "source" | "wiki";
 const clarifyMode = ref<ClarifyMode>("source");
 
 // Wiki
-type WikiTab = "url" | "paste" | "project";
-const wikiTab = ref<WikiTab>("project");
-const wikiUrl = ref("");
-const wikiContent = ref("");
-const fetchingWiki = ref(false);
 const wikiError = ref("");
-const wikiProjects = ref<LocalProject[]>([]);
-const wikiProjectPath = ref("");
-const wikiQuestion = ref("");
-const askingWiki = ref(false);
 
 // ── Result state ─────────────────────────────────────────────────────
 const loading = ref(false);
@@ -51,69 +41,39 @@ const needsWiki = computed(() => clarifyMode.value === "wiki");
 
 const canRun = computed(() => {
   if (loading.value || !specText.value.trim()) return false;
-  if (needsWiki.value) return wikiContent.value.trim().length > 0;
   return true;
 });
 
 // ── Actions ──────────────────────────────────────────────────────────
-onMounted(async () => {
-  try {
-    const res = await api.wiki.projects();
-    wikiProjects.value = res.projects;
-    if (res.projects.length > 0) {
-      wikiProjectPath.value = res.projects[0].path;
-    }
-  } catch {
-    // ignore
-  }
-});
-
-async function fetchWikiFromUrl() {
-  if (!wikiUrl.value.trim()) return;
-  fetchingWiki.value = true;
-  wikiError.value = "";
-  wikiContent.value = "";
-  try {
-    const res = await api.fetchWiki(wikiUrl.value.trim());
-    wikiContent.value = res.content;
-  } catch (e) {
-    wikiError.value = e instanceof Error ? e.message : "Không thể tải URL này";
-  } finally {
-    fetchingWiki.value = false;
-  }
-}
-
-async function askWikiProject() {
-  if (!wikiProjectPath.value || !wikiQuestion.value.trim()) return;
-  askingWiki.value = true;
-  wikiError.value = "";
-  wikiContent.value = "";
-  try {
-    const res = await api.wiki.chat({
-      projectPath: wikiProjectPath.value,
-      sectionKey: "spec-clarify",
-      question: wikiQuestion.value.trim(),
-      history: [],
-    });
-    wikiContent.value = res.answer;
-  } catch (e) {
-    wikiError.value = e instanceof Error ? e.message : "Ask wiki failed";
-  } finally {
-    askingWiki.value = false;
-  }
-}
-
 async function runClarify() {
   if (!canRun.value) return;
   loading.value = true;
   error.value = "";
+  wikiError.value = "";
   result.value = null;
   answers.value = {};
   try {
+    let wikiContent: string | undefined;
+    // Auto-retrieve wiki content from current project's knowledge
+    if (needsWiki.value) {
+      const wikiRes = await api.wiki.chat({
+        projectPath: repoStore.info?.path ?? "",
+        sectionKey: "spec-clarify",
+        question: specText.value.trim(),
+        history: [],
+      });
+      wikiContent = wikiRes.answer;
+      if (wikiRes.chunks?.length) {
+        wikiContent += "\n\n--- Nguồn tham khảo ---\n";
+        for (const chunk of wikiRes.chunks) {
+          wikiContent += `\n[${chunk.sourceFile || "unknown"}]:\n${chunk.content}\n`;
+        }
+      }
+    }
     const res = await api.clarify({
       spec: specText.value,
       mode: clarifyMode.value,
-      wikiContent: needsWiki.value ? wikiContent.value : undefined,
+      wikiContent,
     });
     result.value = res;
     // Pre-fill Q&A answers with defaults
@@ -303,102 +263,27 @@ function categoryLabel(category: string) {
             </button>
           </div>
 
-          <!-- Wiki input -->
+          <!-- Wiki info -->
           <div v-if="needsWiki" class="space-y-2">
-            <div class="flex rounded-md border border-border overflow-hidden">
-              <button
-                class="flex-1 py-1.5 text-xs font-medium transition-colors"
-                :class="
-                  wikiTab === 'project'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
-                "
-                @click="wikiTab = 'project'"
-              >
-                Project Wiki
-              </button>
-              <button
-                class="flex-1 py-1.5 text-xs font-medium transition-colors border-l border-border"
-                :class="
-                  wikiTab === 'url'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
-                "
-                @click="wikiTab = 'url'"
-              >
-                Fetch URL
-              </button>
-              <button
-                class="flex-1 py-1.5 text-xs font-medium transition-colors border-l border-border"
-                :class="
-                  wikiTab === 'paste'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'
-                "
-                @click="wikiTab = 'paste'"
-              >
-                Paste
-              </button>
-            </div>
-
-            <div v-if="wikiTab === 'project'" class="space-y-2">
-              <select v-model="wikiProjectPath" class="w-full h-8 rounded-md border border-border bg-background px-2 text-xs">
-                <option v-for="p in wikiProjects" :key="p.id" :value="p.path">{{ p.name }} — {{ p.path }}</option>
-              </select>
-              <div class="flex gap-1.5">
-                <Input
-                  v-model="wikiQuestion"
-                  placeholder="Hỏi kiến thức từ project đã chọn..."
-                  class="flex-1 h-8 text-xs"
-                  :disabled="askingWiki"
-                  @keydown.enter="askWikiProject"
-                />
-                <Button
-                  variant="outline"
-                  class="h-8 px-3 text-xs shrink-0"
-                  :disabled="!wikiProjectPath || !wikiQuestion.trim() || askingWiki"
-                  @click="askWikiProject"
-                >
-                  {{ askingWiki ? "..." : "Ask" }}
-                </Button>
+            <div
+              class="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/40 border border-border"
+            >
+              <span class="text-base">📚</span>
+              <div class="min-w-0">
+                <p class="text-xs font-medium truncate">
+                  {{ repoStore.info?.name || "Project" }}
+                </p>
+                <p class="text-[11px] text-muted-foreground truncate">
+                  {{ repoStore.info?.path }}
+                </p>
               </div>
             </div>
-
-            <div v-if="wikiTab === 'url'" class="flex gap-1.5">
-              <Input
-                v-model="wikiUrl"
-                placeholder="https://wiki.example.com/..."
-                class="flex-1 h-8 text-xs"
-                :disabled="fetchingWiki"
-                @keydown.enter="fetchWikiFromUrl"
-              />
-              <Button
-                variant="outline"
-                class="h-8 px-3 text-xs shrink-0"
-                :disabled="!wikiUrl.trim() || fetchingWiki"
-                @click="fetchWikiFromUrl"
-              >
-                {{ fetchingWiki ? "..." : "Fetch" }}
-              </Button>
-            </div>
-
-            <Textarea
-              v-if="wikiTab === 'paste'"
-              v-model="wikiContent"
-              placeholder="Paste nội dung wiki vào đây..."
-              class="text-xs resize-none leading-relaxed"
-              rows="4"
-            />
-
+            <p class="text-[11px] text-muted-foreground">
+              Spec sẽ được so sánh tự động với kiến thức Wiki của project hiện
+              tại.
+            </p>
             <p v-if="wikiError" class="text-[11px] text-destructive">
               {{ wikiError }}
-            </p>
-            <p
-              v-else-if="wikiContent"
-              class="text-[11px] text-green-600 dark:text-green-400"
-            >
-              ✓ Wiki sẵn sàng ({{ (wikiContent.length / 1000).toFixed(1) }}k ký
-              tự)
             </p>
           </div>
 
