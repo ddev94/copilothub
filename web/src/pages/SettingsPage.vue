@@ -23,7 +23,13 @@ const embedKey = ref("");
 const embedURL = ref("");
 
 // Download progress
-const embedStatus = ref<EmbeddingStatus>({ state: "unknown", message: "", bytes: 0, total: 0, percent: 0 });
+const embedStatus = ref<EmbeddingStatus>({
+  state: "unknown",
+  message: "",
+  bytes: 0,
+  total: 0,
+  percent: 0,
+});
 let eventSource: EventSource | null = null;
 
 const AI_PROVIDERS = [
@@ -38,10 +44,28 @@ const EMBED_PROVIDERS = [
   { value: "ollama", label: "Ollama", icon: "🦙" },
 ];
 
-const OPENAI_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo", "o1-mini"];
-const ANTHROPIC_MODELS = ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"];
-const OPENAI_EMBED_MODELS = ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"];
-const OLLAMA_EMBED_MODELS = ["nomic-embed-text", "all-minilm", "mxbai-embed-large"];
+const OPENAI_MODELS = [
+  "gpt-4o",
+  "gpt-4o-mini",
+  "gpt-4-turbo",
+  "gpt-3.5-turbo",
+  "o1-mini",
+];
+const ANTHROPIC_MODELS = [
+  "claude-opus-4-7",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5",
+];
+const OPENAI_EMBED_MODELS = [
+  "text-embedding-3-small",
+  "text-embedding-3-large",
+  "text-embedding-ada-002",
+];
+const OLLAMA_EMBED_MODELS = [
+  "nomic-embed-text",
+  "all-minilm",
+  "mxbai-embed-large",
+];
 
 const modelSuggestions = computed(() => {
   if (aiProvider.value === "openai") return OPENAI_MODELS;
@@ -57,15 +81,21 @@ const embedModelSuggestions = computed(() => {
 
 async function loadSettings() {
   try {
-    const [cfg, status] = await Promise.all([api.config.get(), api.auth.status()]);
+    const [cfg, status] = await Promise.all([
+      api.config.get(),
+      api.auth.status(),
+    ]);
     copilotStatus.value = status;
     aiProvider.value = cfg.ai.provider || "copilot";
     aiModel.value = cfg.ai.model || "";
-    aiToken.value = cfg.ai.token === "***" ? "" : (cfg.ai.token || "");
+    aiToken.value = cfg.ai.token === "***" ? "" : cfg.ai.token || "";
     aiBaseURL.value = cfg.ai.baseURL || "";
     embedProvider.value = cfg.knowledge.embeddingProvider || "cybertron";
     embedModel.value = cfg.knowledge.embeddingModel || "";
-    embedKey.value = cfg.knowledge.embeddingKey === "***" ? "" : (cfg.knowledge.embeddingKey || "");
+    embedKey.value =
+      cfg.knowledge.embeddingKey === "***"
+        ? ""
+        : cfg.knowledge.embeddingKey || "";
     embedURL.value = cfg.knowledge.embeddingURL || "";
   } catch {
     // ignore
@@ -107,21 +137,33 @@ function startEmbedStream() {
   eventSource?.close();
   eventSource = api.embedding.stream();
   eventSource.onmessage = (e) => {
-    try { embedStatus.value = JSON.parse(e.data); } catch { /* ignore */ }
+    try {
+      embedStatus.value = JSON.parse(e.data);
+    } catch {
+      /* ignore */
+    }
   };
-  eventSource.onerror = () => { eventSource?.close(); eventSource = null; };
+  eventSource.onerror = () => {
+    eventSource?.close();
+    eventSource = null;
+  };
 }
 
 async function checkEmbedStatus() {
   try {
     embedStatus.value = await api.embedding.check();
     if (embedStatus.value.state === "downloading") startEmbedStream();
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 watch(embedProvider, (v) => {
   if (v === "cybertron") checkEmbedStatus();
-  else { eventSource?.close(); eventSource = null; }
+  else {
+    eventSource?.close();
+    eventSource = null;
+  }
 });
 
 onMounted(() => {
@@ -129,7 +171,9 @@ onMounted(() => {
   checkEmbedStatus();
 });
 
-onUnmounted(() => { eventSource?.close(); });
+onUnmounted(() => {
+  eventSource?.close();
+});
 </script>
 
 <template>
@@ -142,7 +186,10 @@ onUnmounted(() => { eventSource?.close(); });
           @click="router.push('/')"
         >
           <svg class="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
-            <path fill-rule="evenodd" d="M15 8a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 8.5H14.5A.5.5 0 0 0 15 8z"/>
+            <path
+              fill-rule="evenodd"
+              d="M15 8a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 8.5H14.5A.5.5 0 0 0 15 8z"
+            />
           </svg>
         </button>
         <h1 class="text-lg font-semibold">Settings</h1>
@@ -150,12 +197,15 @@ onUnmounted(() => { eventSource?.close(); });
     </header>
 
     <main class="max-w-2xl mx-auto px-6 py-8 space-y-8">
-
       <!-- AI Provider -->
-      <section class="border border-border rounded-lg bg-card divide-y divide-border">
+      <section
+        class="border border-border rounded-lg bg-card divide-y divide-border"
+      >
         <div class="px-5 py-4">
           <h2 class="font-semibold text-sm">AI Provider</h2>
-          <p class="text-xs text-muted-foreground mt-0.5">Chọn model AI dùng để phân tích spec</p>
+          <p class="text-xs text-muted-foreground mt-0.5">
+            Chọn model AI dùng để phân tích spec
+          </p>
         </div>
         <div class="px-5 py-5 space-y-4">
           <!-- Provider tabs -->
@@ -164,9 +214,11 @@ onUnmounted(() => { eventSource?.close(); });
               v-for="p in AI_PROVIDERS"
               :key="p.value"
               class="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border transition-colors"
-              :class="aiProvider === p.value
-                ? 'border-primary bg-primary/10 text-primary font-medium'
-                : 'border-border hover:border-primary/50 text-muted-foreground'"
+              :class="
+                aiProvider === p.value
+                  ? 'border-primary bg-primary/10 text-primary font-medium'
+                  : 'border-border hover:border-primary/50 text-muted-foreground'
+              "
               @click="aiProvider = p.value"
             >
               {{ p.icon }} {{ p.label }}
@@ -177,33 +229,29 @@ onUnmounted(() => { eventSource?.close(); });
           <div v-if="aiProvider === 'copilot'" class="space-y-3">
             <div
               class="flex items-center gap-2 text-xs px-3 py-2 rounded-md border"
-              :class="copilotStatus?.cliFound
-                ? 'border-green-500/30 bg-green-500/10 text-green-600'
-                : 'border-destructive/30 bg-destructive/10 text-destructive'"
+              :class="
+                copilotStatus?.cliFound
+                  ? 'border-green-500/30 bg-green-500/10 text-green-600'
+                  : 'border-destructive/30 bg-destructive/10 text-destructive'
+              "
             >
               <span>{{ copilotStatus?.cliFound ? "✓" : "✗" }}</span>
-              <span>{{ copilotStatus?.cliFound
-                ? "GitHub Copilot CLI detected"
-                : "Copilot CLI not found — cài qua VS Code Copilot Chat extension" }}</span>
+              <span>{{
+                copilotStatus?.cliFound
+                  ? "GitHub Copilot CLI detected"
+                  : "Copilot CLI not found — cài qua VS Code Copilot Chat extension"
+              }}</span>
             </div>
             <div class="space-y-1">
               <label class="text-xs text-muted-foreground">
-                Model <span class="font-normal">(để trống = dùng mặc định Copilot)</span>
+                Model
+                <span class="font-normal"
+                  >(để trống = dùng mặc định Copilot)</span
+                >
               </label>
               <input
                 v-model="aiModel"
                 placeholder="e.g. gpt-4.1, gpt-4o"
-                class="w-full text-sm rounded-md border border-input bg-background px-3 py-2 outline-none focus:ring-1 focus:ring-ring"
-              />
-            </div>
-            <div class="space-y-1">
-              <label class="text-xs text-muted-foreground">
-                GitHub Token Override <span class="font-normal">(không bắt buộc)</span>
-              </label>
-              <input
-                v-model="aiToken"
-                type="password"
-                placeholder="ghp_..."
                 class="w-full text-sm rounded-md border border-input bg-background px-3 py-2 outline-none focus:ring-1 focus:ring-ring"
               />
             </div>
@@ -212,7 +260,9 @@ onUnmounted(() => { eventSource?.close(); });
           <!-- OpenAI -->
           <div v-if="aiProvider === 'openai'" class="space-y-3">
             <div class="space-y-1">
-              <label class="text-xs text-muted-foreground">API Key <span class="text-destructive">*</span></label>
+              <label class="text-xs text-muted-foreground"
+                >API Key <span class="text-destructive">*</span></label
+              >
               <input
                 v-model="aiToken"
                 type="password"
@@ -233,12 +283,15 @@ onUnmounted(() => { eventSource?.close(); });
                   :key="m"
                   class="text-xs px-2 py-0.5 rounded border border-border hover:border-primary/50 text-muted-foreground hover:text-foreground transition-colors"
                   @click="aiModel = m"
-                >{{ m }}</button>
+                >
+                  {{ m }}
+                </button>
               </div>
             </div>
             <div class="space-y-1">
               <label class="text-xs text-muted-foreground">
-                Base URL <span class="font-normal">(để trống = api.openai.com)</span>
+                Base URL
+                <span class="font-normal">(để trống = api.openai.com)</span>
               </label>
               <input
                 v-model="aiBaseURL"
@@ -251,7 +304,9 @@ onUnmounted(() => { eventSource?.close(); });
           <!-- Anthropic -->
           <div v-if="aiProvider === 'anthropic'" class="space-y-3">
             <div class="space-y-1">
-              <label class="text-xs text-muted-foreground">API Key <span class="text-destructive">*</span></label>
+              <label class="text-xs text-muted-foreground"
+                >API Key <span class="text-destructive">*</span></label
+              >
               <input
                 v-model="aiToken"
                 type="password"
@@ -272,7 +327,9 @@ onUnmounted(() => { eventSource?.close(); });
                   :key="m"
                   class="text-xs px-2 py-0.5 rounded border border-border hover:border-primary/50 text-muted-foreground hover:text-foreground transition-colors"
                   @click="aiModel = m"
-                >{{ m }}</button>
+                >
+                  {{ m }}
+                </button>
               </div>
             </div>
           </div>
@@ -280,10 +337,14 @@ onUnmounted(() => { eventSource?.close(); });
       </section>
 
       <!-- Embedding Model -->
-      <section class="border border-border rounded-lg bg-card divide-y divide-border">
+      <section
+        class="border border-border rounded-lg bg-card divide-y divide-border"
+      >
         <div class="px-5 py-4">
           <h2 class="font-semibold text-sm">Embedding Model</h2>
-          <p class="text-xs text-muted-foreground mt-0.5">Dùng cho tính năng Wiki / knowledge search</p>
+          <p class="text-xs text-muted-foreground mt-0.5">
+            Dùng cho tính năng Wiki / knowledge search
+          </p>
         </div>
         <div class="px-5 py-5 space-y-4">
           <!-- Provider tabs -->
@@ -292,9 +353,11 @@ onUnmounted(() => { eventSource?.close(); });
               v-for="p in EMBED_PROVIDERS"
               :key="p.value"
               class="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border transition-colors"
-              :class="embedProvider === p.value
-                ? 'border-primary bg-primary/10 text-primary font-medium'
-                : 'border-border hover:border-primary/50 text-muted-foreground'"
+              :class="
+                embedProvider === p.value
+                  ? 'border-primary bg-primary/10 text-primary font-medium'
+                  : 'border-border hover:border-primary/50 text-muted-foreground'
+              "
               @click="embedProvider = p.value"
             >
               {{ p.icon }} {{ p.label }}
@@ -304,13 +367,18 @@ onUnmounted(() => { eventSource?.close(); });
           <!-- Cybertron -->
           <div v-if="embedProvider === 'cybertron'" class="space-y-3">
             <p class="text-xs text-muted-foreground">
-              Chạy hoàn toàn offline sau khi tải model một lần (~100MB). Không cần API key.
+              Chạy hoàn toàn offline sau khi tải model một lần (~100MB). Không
+              cần API key.
             </p>
             <!-- Downloading -->
             <div v-if="embedStatus.state === 'downloading'" class="space-y-2">
               <div class="flex items-center justify-between text-xs">
-                <span class="text-muted-foreground">{{ embedStatus.message }}</span>
-                <span class="font-mono text-primary">{{ embedStatus.percent }}%</span>
+                <span class="text-muted-foreground">{{
+                  embedStatus.message
+                }}</span>
+                <span class="font-mono text-primary"
+                  >{{ embedStatus.percent }}%</span
+                >
               </div>
               <div class="w-full h-2 bg-muted rounded-full overflow-hidden">
                 <div
@@ -320,11 +388,17 @@ onUnmounted(() => { eventSource?.close(); });
               </div>
             </div>
             <!-- Ready -->
-            <div v-else-if="embedStatus.state === 'ready'" class="flex items-center gap-2 text-xs text-green-600">
+            <div
+              v-else-if="embedStatus.state === 'ready'"
+              class="flex items-center gap-2 text-xs text-green-600"
+            >
               <span>✓</span><span>all-MiniLM-L6-v2 sẵn sàng</span>
             </div>
             <!-- Error -->
-            <div v-else-if="embedStatus.state === 'error'" class="text-xs text-destructive">
+            <div
+              v-else-if="embedStatus.state === 'error'"
+              class="text-xs text-destructive"
+            >
               {{ embedStatus.message }}
             </div>
             <!-- Unknown -->
@@ -336,7 +410,9 @@ onUnmounted(() => { eventSource?.close(); });
           <!-- OpenAI Embeddings -->
           <div v-if="embedProvider === 'openai'" class="space-y-3">
             <div class="space-y-1">
-              <label class="text-xs text-muted-foreground">API Key <span class="text-destructive">*</span></label>
+              <label class="text-xs text-muted-foreground"
+                >API Key <span class="text-destructive">*</span></label
+              >
               <input
                 v-model="embedKey"
                 type="password"
@@ -357,7 +433,9 @@ onUnmounted(() => { eventSource?.close(); });
                   :key="m"
                   class="text-xs px-2 py-0.5 rounded border border-border hover:border-primary/50 text-muted-foreground hover:text-foreground transition-colors"
                   @click="embedModel = m"
-                >{{ m }}</button>
+                >
+                  {{ m }}
+                </button>
               </div>
             </div>
           </div>
@@ -377,12 +455,15 @@ onUnmounted(() => { eventSource?.close(); });
                   :key="m"
                   class="text-xs px-2 py-0.5 rounded border border-border hover:border-primary/50 text-muted-foreground hover:text-foreground transition-colors"
                   @click="embedModel = m"
-                >{{ m }}</button>
+                >
+                  {{ m }}
+                </button>
               </div>
             </div>
             <div class="space-y-1">
               <label class="text-xs text-muted-foreground">
-                Ollama Endpoint <span class="font-normal">(để trống = localhost:11434)</span>
+                Ollama Endpoint
+                <span class="font-normal">(để trống = localhost:11434)</span>
               </label>
               <input
                 v-model="embedURL"
@@ -403,15 +484,18 @@ onUnmounted(() => { eventSource?.close(); });
           <button
             class="text-sm px-4 py-2 rounded-md border border-border hover:bg-muted transition-colors"
             @click="router.push('/')"
-          >Huỷ</button>
+          >
+            Huỷ
+          </button>
           <button
             class="text-sm px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
             :disabled="saving"
             @click="saveSettings"
-          >{{ saving ? "Đang lưu..." : "Lưu cài đặt" }}</button>
+          >
+            {{ saving ? "Đang lưu..." : "Lưu cài đặt" }}
+          </button>
         </div>
       </div>
-
     </main>
   </div>
 </template>

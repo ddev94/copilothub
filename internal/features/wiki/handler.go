@@ -238,10 +238,30 @@ func (h *Handler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	docID := r.PathValue("id")
 	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
-	if err := c.DeleteDocument(r.Context(), projectID(projectPath), docID); err != nil {
+	pid := projectID(projectPath)
+
+	// Look up the source file name before deleting metadata
+	docs, _ := c.ListDocuments(r.Context(), pid)
+	var sourceFile string
+	for _, doc := range docs {
+		if doc.ID == docID {
+			sourceFile = doc.SourceFile
+			break
+		}
+	}
+
+	// Delete from vector DB + metadata
+	if err := c.DeleteDocument(r.Context(), pid, docID); err != nil {
 		writeError(w, "delete failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+
+	// Remove the physical source file from disk
+	if sourceFile != "" {
+		diskPath := filepath.Join(projectPath, knowledgeFilesDir, sourceFile)
+		_ = os.Remove(diskPath)
+	}
+
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
