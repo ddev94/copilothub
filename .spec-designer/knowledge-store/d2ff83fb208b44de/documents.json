@@ -1,0 +1,11 @@
+[
+  {
+    "id": "398e0ff0-4d96-4118-bd06-734022daaca4",
+    "name": "SKILL.md",
+    "sourceFile": "SKILL.md",
+    "createdAt": "2026-05-20T02:38:05Z",
+    "chunks": [
+      "---\nname: daily-weather-notification\ndescription: Daily weather forecast at 7am\n---\n\nFetch the current weather and forecast for today using a weather API (OpenWeatherMap or similar). Auto-detect the user's location based on their IP address.\n\nReturn a nicely formatted weather notification with:\n- Current temperature and weather conditions\n- High/low temperatures for the day\n- Brief summary of the forecast\n- Any weather alerts if applicable\n\nFormat the response as a clear, readable notification that the user can quickly scan in the morning. Keep it concise but informative."
+    ]
+  }
+]

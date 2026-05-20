@@ -10,8 +10,7 @@ import (
 )
 
 type Feature struct {
-	h       *Handler
-	sidecar *knowledge.Sidecar
+	h *Handler
 }
 
 func New() *Feature { return &Feature{} }
@@ -37,13 +36,12 @@ func (f *Feature) Init(ctx hub.FeatureContext) error {
 
 	var knowledgeClient *knowledge.Client
 	if cfg.Knowledge.Enabled {
-		chromaDir := filepath.Join(ctx.WorkDir, ".spec-designer", "chroma")
-		sidecar, url, err := knowledge.StartSidecar(chromaDir)
+		storeDir := filepath.Join(ctx.WorkDir, ".spec-designer", "knowledge-store")
+		client, err := knowledge.NewClient(storeDir)
 		if err != nil {
-			fmt.Printf("[knowledge] sidecar failed to start: %v — knowledge disabled\n", err)
-		} else if url != "" {
-			f.sidecar = sidecar
-			knowledgeClient = knowledge.NewClient(url)
+			fmt.Printf("[knowledge] store failed to initialise: %v — knowledge disabled\n", err)
+		} else {
+			knowledgeClient = client
 		}
 	}
 
@@ -57,10 +55,4 @@ func (f *Feature) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /knowledge/upload", f.h.Upload)
 	mux.HandleFunc("GET /knowledge/documents", f.h.ListDocuments)
 	mux.HandleFunc("DELETE /knowledge/document/{id}", f.h.DeleteDocument)
-}
-
-func (f *Feature) Stop() {
-	if f.sidecar != nil {
-		f.sidecar.Stop()
-	}
 }

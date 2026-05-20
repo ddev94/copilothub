@@ -22,9 +22,8 @@ type AIConfig struct {
 }
 
 type KnowledgeConfig struct {
-	Enabled    bool   `json:"enabled"`
-	ServiceURL string `json:"serviceUrl"`
-	TopK       int    `json:"topK"`
+	Enabled bool `json:"enabled"`
+	TopK    int  `json:"topK"`
 }
 
 type Store struct {
@@ -50,12 +49,6 @@ func (s *Store) Load() (*Config, error) {
 	if t := os.Getenv("GITHUB_TOKEN"); t != "" {
 		cfg.AI.Token = t
 	}
-	if u := os.Getenv("KNOWLEDGE_SERVICE_URL"); u != "" {
-		cfg.Knowledge.ServiceURL = u
-	}
-	if cfg.Knowledge.ServiceURL == "" {
-		cfg.Knowledge.ServiceURL = "http://localhost:8001"
-	}
 	if cfg.Knowledge.TopK <= 0 {
 		cfg.Knowledge.TopK = 6
 	}
@@ -74,16 +67,11 @@ func (s *Store) Save(cfg *Config) error {
 }
 
 func (s *Store) defaults() *Config {
-	serviceURL := os.Getenv("KNOWLEDGE_SERVICE_URL")
-	if serviceURL == "" {
-		serviceURL = "http://localhost:8001"
-	}
 	return &Config{
 		AI: AIConfig{Token: os.Getenv("GITHUB_TOKEN")},
 		Knowledge: KnowledgeConfig{
-			Enabled:    true,
-			ServiceURL: serviceURL,
-			TopK:       6,
+			Enabled: true,
+			TopK:    6,
 		},
 	}
 }
