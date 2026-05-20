@@ -10,6 +10,7 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
   const projects = ref<LocalProject[]>([]);
   const selectedProjectPath = ref("");
   const documents = ref<KnowledgeDocument[]>([]);
+  const pendingDocuments = ref<KnowledgeDocument[]>([]);
   const loading = ref(false);
   const uploading = ref(false);
   const error = ref<string | null>(null);
@@ -116,13 +117,18 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
   async function loadDocuments() {
     if (!selectedProjectPath.value) {
       documents.value = [];
+      pendingDocuments.value = [];
       return;
     }
     loading.value = true;
     error.value = null;
     try {
-      const res = await api.wiki.listDocuments(selectedProjectPath.value);
-      documents.value = res.documents;
+      const [docsRes, pendingRes] = await Promise.all([
+        api.wiki.listDocuments(selectedProjectPath.value),
+        api.wiki.listPending(selectedProjectPath.value),
+      ]);
+      documents.value = docsRes.documents;
+      pendingDocuments.value = pendingRes.documents;
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Load knowledge failed";
     } finally {
@@ -159,6 +165,39 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     }
   }
 
+  async function approveDocument(id: string) {
+    if (!selectedProjectPath.value) return;
+    error.value = null;
+    try {
+      await api.wiki.approveDocument(id, selectedProjectPath.value);
+      await loadDocuments();
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : "Approve failed";
+    }
+  }
+
+  async function rejectDocument(id: string) {
+    if (!selectedProjectPath.value) return;
+    error.value = null;
+    try {
+      await api.wiki.rejectDocument(id, selectedProjectPath.value);
+      await loadDocuments();
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : "Reject failed";
+    }
+  }
+
+  async function approveAll() {
+    if (!selectedProjectPath.value) return;
+    error.value = null;
+    try {
+      await api.wiki.approveAll(selectedProjectPath.value);
+      await loadDocuments();
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : "Approve all failed";
+    }
+  }
+
   function setSelectedProject(path: string) {
     selectedProjectPath.value = path;
   }
@@ -169,6 +208,7 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     projects,
     selectedProjectPath,
     documents,
+    pendingDocuments,
     loading,
     uploading,
     error,
@@ -178,6 +218,9 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     loadDocuments,
     uploadFiles,
     deleteDocument,
+    approveDocument,
+    rejectDocument,
+    approveAll,
     setSelectedProject,
     getThread,
     appendTurn,

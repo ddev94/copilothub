@@ -101,5 +101,24 @@ export const api = {
           method: "DELETE",
         },
       ),
+    listPending: (projectPath: string) =>
+      request<{ documents: KnowledgeDocument[] }>(
+        `/features/wiki/knowledge/pending?projectPath=${encodeURIComponent(projectPath)}`,
+      ),
+    approveDocument: (id: string, projectPath: string, approvedBy = "user") =>
+      request<{ ok: boolean }>(
+        `/features/wiki/knowledge/document/${id}/approve?projectPath=${encodeURIComponent(projectPath)}&approvedBy=${encodeURIComponent(approvedBy)}`,
+        { method: "POST" },
+      ),
+    rejectDocument: (id: string, projectPath: string) =>
+      request<{ ok: boolean }>(
+        `/features/wiki/knowledge/document/${id}/reject?projectPath=${encodeURIComponent(projectPath)}`,
+        { method: "POST" },
+      ),
+    approveAll: (projectPath: string, approvedBy = "user") =>
+      request<{ ok: boolean; count: number }>(
+        `/features/wiki/knowledge/approve-all?projectPath=${encodeURIComponent(projectPath)}&approvedBy=${encodeURIComponent(approvedBy)}`,
+        { method: "POST" },
+      ),
   },
 };

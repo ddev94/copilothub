@@ -37,19 +37,32 @@ type metaStore struct {
 }
 
 type metaEntry struct {
-	ProjectID  string `json:"projectId"`
-	DocID      string `json:"docId"`
-	Name       string `json:"name"`
-	SourceFile string `json:"sourceFile"`
-	CreatedAt  string `json:"createdAt"`
+	ProjectID  string  `json:"projectId"`
+	DocID      string  `json:"docId"`
+	Name       string  `json:"name"`
+	SourceFile string  `json:"sourceFile"`
+	CreatedAt  string  `json:"createdAt"`
+	Status     string  `json:"status"`     // pending, approved, rejected
+	Verified   bool    `json:"verified"`   // true if approved
+	Confidence float64 `json:"confidence"` // 0.0-1.0
+	SourceType string  `json:"sourceType"` // upload, chat, wiki
+	ApprovedBy string  `json:"approvedBy,omitempty"`
+	ApprovedAt string  `json:"approvedAt,omitempty"`
+	RejectedAt string  `json:"rejectedAt,omitempty"`
 }
 
 // Document is stored document metadata (without chunks).
 type Document struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	SourceFile string `json:"sourceFile"`
-	CreatedAt  string `json:"createdAt"`
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	SourceFile string  `json:"sourceFile"`
+	CreatedAt  string  `json:"createdAt"`
+	Status     string  `json:"status"`
+	Verified   bool    `json:"verified"`
+	Confidence float64 `json:"confidence"`
+	SourceType string  `json:"sourceType"`
+	ApprovedBy string  `json:"approvedBy,omitempty"`
+	ApprovedAt string  `json:"approvedAt,omitempty"`
 }
 
 // Chunk is a retrieved text segment with similarity score.
@@ -149,6 +162,10 @@ func (c *Client) Ingest(ctx context.Context, projectID, filePath, fileName, _ st
 		Name:       fileName,
 		SourceFile: fileName,
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+		Status:     "pending",
+		Verified:   false,
+		Confidence: 0.8,
+		SourceType: "upload",
 	})
 	c.meta.mu.Unlock()
 
@@ -168,6 +185,12 @@ func (c *Client) ListDocuments(_ context.Context, projectID string) ([]Document,
 				Name:       e.Name,
 				SourceFile: e.SourceFile,
 				CreatedAt:  e.CreatedAt,
+				Status:     e.Status,
+				Verified:   e.Verified,
+				Confidence: e.Confidence,
+				SourceType: e.SourceType,
+				ApprovedBy: e.ApprovedBy,
+				ApprovedAt: e.ApprovedAt,
 			})
 		}
 	}
@@ -217,11 +240,103 @@ func (c *Client) Retrieve(ctx context.Context, projectID, query string, topK int
 	if err != nil {
 		return nil, fmt.Errorf("vector query: %w", err)
 	}
-	chunks := make([]Chunk, len(results))
-	for i, r := range results {
-		chunks[i] = Chunk{Content: r.Content, Score: float64(r.Similarity)}
+
+	approved := c.approvedDocIDSet(projectID)
+	chunks := make([]Chunk, 0, len(results))
+	for _, r := range results {
+		docID := ""
+		if r.Metadata != nil {
+			docID = r.Metadata["doc_id"]
+		}
+		if !approved[docID] {
+			continue
+		}
+		chunks = append(chunks, Chunk{Content: r.Content, Score: float64(r.Similarity)})
 	}
 	return chunks, nil
+}
+
+func (c *Client) PendingDocuments(_ context.Context, projectID string) ([]Document, error) {
+	c.meta.mu.RLock()
+	defer c.meta.mu.RUnlock()
+
+	docs := []Document{}
+	for _, e := range c.meta.docs {
+		if e.ProjectID == projectID && e.Status == "pending" {
+			docs = append(docs, Document{ID: e.DocID, Name: e.Name, SourceFile: e.SourceFile, CreatedAt: e.CreatedAt, Status: e.Status, Verified: e.Verified, Confidence: e.Confidence, SourceType: e.SourceType})
+		}
+	}
+	return docs, nil
+}
+
+func (c *Client) ApproveDocument(_ context.Context, projectID, docID, approvedBy string) error {
+	c.meta.mu.Lock()
+	found := false
+	for i := range c.meta.docs {
+		e := &c.meta.docs[i]
+		if e.ProjectID == projectID && e.DocID == docID {
+			e.Status = "approved"
+			e.Verified = true
+			e.ApprovedBy = approvedBy
+			e.ApprovedAt = time.Now().UTC().Format(time.RFC3339)
+			e.RejectedAt = ""
+			found = true
+			break
+		}
+	}
+	c.meta.mu.Unlock()
+	if !found {
+		return fmt.Errorf("document not found: %s", docID)
+	}
+	return c.meta.save()
+}
+
+func (c *Client) RejectDocument(_ context.Context, projectID, docID string) error {
+	c.meta.mu.Lock()
+	found := false
+	for i := range c.meta.docs {
+		e := &c.meta.docs[i]
+		if e.ProjectID == projectID && e.DocID == docID {
+			e.Status = "rejected"
+			e.Verified = false
+			e.ApprovedBy = ""
+			e.ApprovedAt = ""
+			e.RejectedAt = time.Now().UTC().Format(time.RFC3339)
+			found = true
+			break
+		}
+	}
+	c.meta.mu.Unlock()
+	if !found {
+		return fmt.Errorf("document not found: %s", docID)
+	}
+	return c.meta.save()
+}
+
+func (c *Client) ApproveAllPending(ctx context.Context, projectID, approvedBy string) (int, error) {
+	pending, err := c.PendingDocuments(ctx, projectID)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, doc := range pending {
+		if err := c.ApproveDocument(ctx, projectID, doc.ID, approvedBy); err == nil {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (c *Client) approvedDocIDSet(projectID string) map[string]bool {
+	c.meta.mu.RLock()
+	defer c.meta.mu.RUnlock()
+	m := map[string]bool{}
+	for _, e := range c.meta.docs {
+		if e.ProjectID == projectID && e.Status == "approved" && e.Verified {
+			m[e.DocID] = true
+		}
+	}
+	return m
 }
 
 func (ms *metaStore) save() error {

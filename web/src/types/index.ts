@@ -35,6 +35,12 @@ export interface KnowledgeDocument {
   name: string;
   sourceFile: string;
   createdAt: string;
+  status?: "pending" | "approved" | "rejected";
+  verified?: boolean;
+  confidence?: number;
+  sourceType?: string;
+  approvedBy?: string;
+  approvedAt?: string;
 }
 
 export interface LocalProject {

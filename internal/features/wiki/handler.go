@@ -49,11 +49,13 @@ type chatReq struct {
 	SectionKey  string     `json:"sectionKey"`
 	Question    string     `json:"question"`
 	History     []chatTurn `json:"history"`
+	Intent      string     `json:"intent,omitempty"` // fact_lookup, as_is, to_be, relationship_query, summary
 }
 
 type chatResp struct {
-	Answer string            `json:"answer"`
-	Chunks []knowledge.Chunk `json:"chunks"`
+	Answer         string            `json:"answer"`
+	Chunks         []knowledge.Chunk `json:"chunks"`
+	DetectedIntent string            `json:"detectedIntent,omitempty"`
 }
 
 func NewHandler(rootPath string, client *knowledge.Client, aiProvider ai.Provider, topK int) *Handler {
@@ -85,14 +87,21 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 	projectPath := h.resolveProjectPath(req.ProjectPath)
 	projectID := projectID(projectPath)
+	intent := strings.TrimSpace(req.Intent)
+	if intent == "" {
+		intent = detectIntent(req.Question)
+	}
 	chunks, err := h.retrieveRelatedChunks(r.Context(), projectID, req.Question)
 	if err != nil {
 		writeError(w, "knowledge retrieve failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+	if intent == "relationship_query" {
+		chunks = h.expandByGraph(r.Context(), projectID, req.Question, chunks)
+	}
 
-	answer := h.synthesizeAnswer(r.Context(), req.SectionKey, req.Question, req.History, chunks)
-	writeJSON(w, chatResp{Answer: answer, Chunks: chunks})
+	answer := h.synthesizeAnswer(r.Context(), intent, req.SectionKey, req.Question, req.History, chunks)
+	writeJSON(w, chatResp{Answer: answer, Chunks: chunks, DetectedIntent: intent})
 }
 
 func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
@@ -223,6 +232,70 @@ func (h *Handler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
+func (h *Handler) ListPending(w http.ResponseWriter, r *http.Request) {
+	if h.client == nil {
+		writeJSON(w, map[string]any{"documents": []knowledge.Document{}})
+		return
+	}
+	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
+	docs, err := h.client.PendingDocuments(r.Context(), projectID(projectPath))
+	if err != nil {
+		writeError(w, "failed to list pending: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]any{"documents": docs})
+}
+
+func (h *Handler) ApproveDocument(w http.ResponseWriter, r *http.Request) {
+	if h.client == nil {
+		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
+		return
+	}
+	docID := r.PathValue("id")
+	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
+	approvedBy := r.URL.Query().Get("approvedBy")
+	if approvedBy == "" {
+		approvedBy = "user"
+	}
+	if err := h.client.ApproveDocument(r.Context(), projectID(projectPath), docID, approvedBy); err != nil {
+		writeError(w, "approve failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (h *Handler) RejectDocument(w http.ResponseWriter, r *http.Request) {
+	if h.client == nil {
+		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
+		return
+	}
+	docID := r.PathValue("id")
+	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
+	if err := h.client.RejectDocument(r.Context(), projectID(projectPath), docID); err != nil {
+		writeError(w, "reject failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (h *Handler) ApproveAll(w http.ResponseWriter, r *http.Request) {
+	if h.client == nil {
+		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
+		return
+	}
+	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
+	approvedBy := r.URL.Query().Get("approvedBy")
+	if approvedBy == "" {
+		approvedBy = "user"
+	}
+	count, err := h.client.ApproveAllPending(r.Context(), projectID(projectPath), approvedBy)
+	if err != nil {
+		writeError(w, "approve all failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "count": count})
+}
+
 func (h *Handler) localProjects() []localProject {
 	parent := filepath.Dir(h.rootPath)
 	entries, err := os.ReadDir(parent)
@@ -300,7 +373,53 @@ func (h *Handler) retrieveRelatedChunks(ctx context.Context, projectID, question
 	return merged, nil
 }
 
-func (h *Handler) synthesizeAnswer(ctx context.Context, sectionKey, question string, history []chatTurn, chunks []knowledge.Chunk) string {
+func detectIntent(question string) string {
+	q := strings.ToLower(question)
+	if strings.Contains(q, "quan hệ") || strings.Contains(q, "liên quan") || strings.Contains(q, "ảnh hưởng") || strings.Contains(q, "phụ thuộc") {
+		return "relationship_query"
+	}
+	if strings.Contains(q, "hiện tại") || strings.Contains(q, "đang") || strings.Contains(q, "as-is") {
+		return "as_is"
+	}
+	if strings.Contains(q, "thay đổi") || strings.Contains(q, "to-be") || strings.Contains(q, "impact") || strings.Contains(q, "mới") {
+		return "to_be"
+	}
+	if strings.Contains(q, "tóm tắt") || strings.Contains(q, "summary") {
+		return "summary"
+	}
+	return "fact_lookup"
+}
+
+func (h *Handler) expandByGraph(ctx context.Context, projectID, question string, chunks []knowledge.Chunk) []knowledge.Chunk {
+	nodes, err := h.client.SearchGraphNodes(ctx, projectID, question)
+	if err != nil || len(nodes) == 0 {
+		return chunks
+	}
+	for _, node := range nodes {
+		neighbors, edges, err := h.client.GetGraphNeighbors(ctx, projectID, node.ID, 1)
+		if err != nil {
+			continue
+		}
+		for _, n := range neighbors {
+			chunks = append(chunks, knowledge.Chunk{
+				Content: fmt.Sprintf("[Graph] %s (%s)", n.CanonicalName, n.Type),
+				Score:   0.7,
+			})
+		}
+		for _, e := range edges {
+			chunks = append(chunks, knowledge.Chunk{
+				Content: fmt.Sprintf("[Relation] %s", e.RelationType),
+				Score:   0.6,
+			})
+		}
+		if len(chunks) > h.topK*3 {
+			break
+		}
+	}
+	return chunks
+}
+
+func (h *Handler) synthesizeAnswer(ctx context.Context, intent, sectionKey, question string, history []chatTurn, chunks []knowledge.Chunk) string {
 	if len(chunks) == 0 {
 		return "Không tìm thấy thông tin liên quan trong knowledge của project đã chọn."
 	}
@@ -329,8 +448,23 @@ func (h *Handler) synthesizeAnswer(ctx context.Context, sectionKey, question str
 		fmt.Fprintf(&contextBuilder, "--- Đoạn %d (score: %.2f) ---\n%s\n\n", i+1, chunk.Score, strings.TrimSpace(chunk.Content))
 	}
 
+	intentGuide := map[string]string{
+		"relationship_query": "Tập trung giải thích các quan hệ phụ thuộc, tác động qua lại và chuỗi ảnh hưởng giữa các thực thể nghiệp vụ.",
+		"as_is":              "Phân tích trạng thái hiện tại (As-is), không giả định thay đổi mới.",
+		"to_be":              "Phân tích thay đổi To-be và impact so với luồng hiện tại.",
+		"summary":            "Tóm tắt ngắn gọn, rõ ràng theo ý chính.",
+		"fact_lookup":        "Trả lời trực tiếp theo facts trong knowledge đã verify.",
+	}
+	guide := intentGuide[intent]
+	if guide == "" {
+		guide = intentGuide["fact_lookup"]
+	}
+
 	prompt := fmt.Sprintf(`%s
 # Câu hỏi hiện tại
+%s
+
+# Intent phát hiện
 %s
 
 # Yêu cầu trả lời
@@ -343,30 +477,9 @@ BẮT BUỘC format output dưới dạng MARKDOWN có cấu trúc rõ ràng:
 - In đậm (**từ khóa**) cho các khái niệm nghiệp vụ quan trọng.
 - Không viết plain text liền mạch không có heading hay list.
 
-Trước khi trả lời, hãy tự xác định câu hỏi thuộc 1 trong 2 case:
-
-## Case A — Hỏi về logic cũ (As-is)
-Dùng khi người dùng hỏi cách hệ thống hiện tại đang chạy.
-Cấu trúc bắt buộc:
-1. ## Tóm tắt nghiệp vụ
-2. ## Luồng nghiệp vụ hiện tại (As-is)
-3. ## Điều kiện, rẽ nhánh và ngoại lệ
-4. ## Điểm BA cần lưu ý
-
-## Case B — Đưa logic mới vào logic cũ (To-be + impact)
-Dùng khi người dùng hỏi thêm/chèn/sửa logic mới vào luồng hiện tại.
-Cấu trúc bắt buộc:
-1. ## Mục tiêu thay đổi nghiệp vụ
-2. ## So sánh As-is vs To-be (theo từng bước)
-3. ## Impact và điểm xung đột cần xử lý
-4. ## Rủi ro nghiệp vụ và đề xuất tích hợp
-5. ## Checklist BA xác nhận với PO/Stakeholder (dùng “- [ ]” cho mỗi mục)
-
-Quy tắc chung:
-- Không nhắc code/API/database/table/function/column.
-- Ưu tiên ngôn ngữ business, ví dụ nghiệp vụ thực tế.
-- Nếu dữ liệu chưa đủ, phải có mục “## Phần còn thiếu dữ liệu” và liệt kê câu hỏi cần bổ sung.
-`, contextBuilder.String(), question)
+Chỉ sử dụng dữ liệu từ knowledge đã được duyệt.
+Nếu dữ liệu chưa đủ, phải có mục “## Phần còn thiếu dữ liệu” và liệt kê câu hỏi cần bổ sung.
+`, contextBuilder.String(), question, guide)
 
 	aiCtx, cancel := context.WithTimeout(ctx, aiTimeout)
 	defer cancel()

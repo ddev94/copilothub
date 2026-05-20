@@ -77,6 +77,10 @@ const projectSessions = computed(() => {
 
 const canAsk = computed(() => !!selectedProject.value && question.value.trim().length > 0 && !answering.value);
 
+const hasKnowledge = computed(() => {
+  return knowledge.documents.length > 0 || knowledge.pendingDocuments.length > 0;
+});
+
 watch(
   () => knowledge.selectedProjectPath,
   async () => {
@@ -111,8 +115,11 @@ async function askWiki() {
       question: q,
       history,
     });
-    currentThread.value[turnIndex] = { question: q, answer: res.answer, chunks: res.chunks };
-    knowledge.appendTurn(selectedProject.value, sectionKey.value, { question: q, answer: res.answer });
+    const answer = res.answer?.trim()
+      ? res.answer
+      : "Hiện chưa tìm thấy thông tin liên quan trong knowledge của project. Bạn hãy upload/approve thêm tài liệu hoặc đặt câu hỏi cụ thể hơn.";
+    currentThread.value[turnIndex] = { question: q, answer, chunks: res.chunks ?? [] };
+    knowledge.appendTurn(selectedProject.value, sectionKey.value, { question: q, answer });
   } catch (e) {
     currentThread.value.splice(turnIndex, 1);
     chatError.value = e instanceof Error ? e.message : "Ask wiki failed";
@@ -158,7 +165,7 @@ function cancelUpload() {
 }
 
 function newSession() {
-  const newKey = `session-${Date.now()}`;
+  const newKey = "Session New";
   sectionKey.value = newKey;
   knowledge.ensureSession(selectedProject.value, newKey);
   currentThread.value = [];
@@ -216,7 +223,7 @@ function cancelEditSession() {
                 <p class="text-xs font-medium truncate">{{ session.title }}</p>
                 <p class="text-[11px] text-muted-foreground">{{ knowledge.getThread(session.projectPath, session.sectionKey).length }} câu hỏi</p>
               </div>
-              <Button variant="ghost" size="sm" class="h-6 px-2 text-[10px] opacity-0 group-hover:opacity-100" @click.stop="startEditSession(session.sectionKey)">✎</Button>
+              <Button variant="ghost" size="sm" class="h-7 w-7 text-sm" @click.stop="startEditSession(session.sectionKey)">✎</Button>
             </div>
           </div>
         </div>
@@ -244,7 +251,15 @@ function cancelEditSession() {
 
       <ScrollArea class="flex-1 px-6 py-5">
         <div class="space-y-4 max-w-4xl mx-auto">
-          <div v-if="currentThread.length === 0 && !answering" class="rounded-xl border border-dashed border-border bg-muted/30 p-4">
+          <div v-if="selectedProject && !hasKnowledge && currentThread.length === 0 && !answering" class="rounded-xl border border-dashed border-amber-500/40 bg-amber-50/40 dark:bg-amber-950/20 p-4 space-y-3">
+            <div>
+              <p class="text-sm font-medium mb-1">Project chưa có knowledge</p>
+              <p class="text-xs text-muted-foreground">Bạn cần upload tài liệu và approve để Wiki Assistant có dữ liệu trả lời chính xác.</p>
+            </div>
+            <Button size="sm" variant="outline" @click="showKnowledgeDocs = true">Mở panel Docs để nạp knowledge</Button>
+          </div>
+
+          <div v-else-if="currentThread.length === 0 && !answering" class="rounded-xl border border-dashed border-border bg-muted/30 p-4">
             <p class="text-sm font-medium mb-1">Gợi ý cho BA</p>
             <p class="text-xs text-muted-foreground">Hãy hỏi theo góc nhìn nghiệp vụ, ví dụ: "Luồng VOID ảnh hưởng đến những quy tắc vận hành nào?"</p>
           </div>
@@ -299,8 +314,12 @@ function cancelEditSession() {
     </div>
 
     <div v-if="showKnowledgeDocs" class="w-80 border-l border-border/60 flex flex-col bg-background">
-      <div class="px-4 py-3 border-b border-border/60">
+      <div class="px-4 py-3 border-b border-border/60 space-y-2">
         <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Knowledge documents</p>
+        <div class="flex items-center justify-between">
+          <p class="text-[11px] text-muted-foreground">Pending: {{ knowledge.pendingDocuments.length }}</p>
+          <Button variant="outline" size="sm" class="h-6 text-[10px] px-2" :disabled="knowledge.pendingDocuments.length === 0" @click="knowledge.approveAll">Approve all</Button>
+        </div>
       </div>
 
       <div class="p-4 space-y-2 border-b border-border/60 bg-muted/10">
@@ -317,14 +336,37 @@ function cancelEditSession() {
 
       <ScrollArea class="flex-1 px-4 py-3">
         <div v-if="knowledge.loading" class="text-xs text-muted-foreground">Đang tải...</div>
-        <div v-else-if="knowledge.documents.length === 0" class="text-xs text-muted-foreground">Chưa có tài liệu.</div>
-        <div v-else class="space-y-2">
-          <div v-for="doc in knowledge.documents" :key="doc.id" class="border border-border/60 rounded-lg p-2 flex items-start justify-between gap-2">
-            <div class="min-w-0">
-              <p class="text-xs font-medium truncate">{{ doc.name }}</p>
-              <p class="text-[10px] text-muted-foreground truncate">{{ doc.sourceFile }}</p>
+        <div v-else-if="knowledge.documents.length === 0 && knowledge.pendingDocuments.length === 0" class="text-xs text-muted-foreground">Chưa có tài liệu.</div>
+        <div v-else class="space-y-3">
+          <div v-if="knowledge.pendingDocuments.length > 0">
+            <p class="text-[11px] font-semibold text-amber-600 dark:text-amber-400 mb-2">⏳ Pending Review</p>
+            <div class="space-y-2">
+              <div v-for="doc in knowledge.pendingDocuments" :key="doc.id" class="border border-amber-500/40 rounded-lg p-2 bg-amber-50/50 dark:bg-amber-950/20">
+                <div class="flex items-start justify-between gap-2 mb-2">
+                  <div class="min-w-0 flex-1">
+                    <p class="text-xs font-medium truncate">{{ doc.name }}</p>
+                    <p class="text-[10px] text-muted-foreground truncate">{{ doc.sourceFile }}</p>
+                  </div>
+                </div>
+                <div class="flex gap-1">
+                  <Button variant="outline" size="sm" class="h-6 px-2 text-[10px] flex-1" @click="knowledge.approveDocument(doc.id)">✓ Approve</Button>
+                  <Button variant="ghost" size="sm" class="h-6 px-2 text-[10px] flex-1" @click="knowledge.rejectDocument(doc.id)">✗ Reject</Button>
+                </div>
+              </div>
             </div>
-            <Button variant="ghost" size="sm" class="h-6 px-2 text-[10px]" @click="knowledge.deleteDocument(doc.id)">×</Button>
+          </div>
+
+          <div v-if="knowledge.documents.length > 0">
+            <p class="text-[11px] font-semibold text-green-600 dark:text-green-400 mb-2">✓ Approved</p>
+            <div class="space-y-2">
+              <div v-for="doc in knowledge.documents.filter(d => d.status === 'approved')" :key="doc.id" class="border border-border/60 rounded-lg p-2 flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <p class="text-xs font-medium truncate">{{ doc.name }}</p>
+                  <p class="text-[10px] text-muted-foreground truncate">{{ doc.sourceFile }}</p>
+                </div>
+                <Button variant="ghost" size="sm" class="h-6 px-2 text-[10px]" @click="knowledge.deleteDocument(doc.id)">×</Button>
+              </div>
+            </div>
           </div>
         </div>
       </ScrollArea>
