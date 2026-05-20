@@ -77,6 +77,7 @@ async function runClarify() {
       spec: specText.value,
       mode: clarifyMode.value,
       wikiContent,
+      projectId: projectId.value,
     });
     result.value = res;
     // Pre-fill Q&A answers with defaults

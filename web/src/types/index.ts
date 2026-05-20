@@ -62,6 +62,9 @@ export interface LocalProject {
   id: string;
   name: string;
   createdAt?: string;
+  repoURL?: string;
+  repoBranch?: string;
+  repoCloned?: boolean;
 }
 
 export interface WikiChatChunk {

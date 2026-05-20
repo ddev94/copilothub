@@ -10,6 +10,10 @@ export const router = createRouter({
       component: () => import("@/hub/ProjectPage.vue"),
     },
     {
+      path: "/projects/:projectId/settings",
+      component: () => import("@/hub/ProjectSettingsPage.vue"),
+    },
+    {
       path: "/projects/:projectId/features/spec-clarify",
       component: () => import("@/features/spec-clarify/EditorPage.vue"),
     },

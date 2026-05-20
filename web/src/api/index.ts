@@ -42,8 +42,32 @@ export const api = {
       }),
     delete: (id: string) =>
       request<{ ok: boolean }>(`/projects/${id}`, { method: "DELETE" }),
+    update: (id: string, payload: { name: string }) =>
+      request<LocalProject>(`/projects/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      }),
+    connectRepo: (id: string, repoURL: string, branch?: string) =>
+      request<LocalProject>(`/projects/${id}/connect-repo`, {
+        method: "POST",
+        body: JSON.stringify({ repoURL, branch: branch || "" }),
+      }),
+    disconnectRepo: (id: string) =>
+      request<LocalProject>(`/projects/${id}/disconnect-repo`, {
+        method: "POST",
+      }),
+    changeBranch: (id: string, branch: string) =>
+      request<LocalProject>(`/projects/${id}/change-branch`, {
+        method: "POST",
+        body: JSON.stringify({ branch }),
+      }),
   },
-  clarify: (payload: { spec: string; mode: string; wikiContent?: string }) =>
+  clarify: (payload: {
+    spec: string;
+    mode: string;
+    wikiContent?: string;
+    projectId?: string;
+  }) =>
     request<ClarifyResponse>(`${SPEC_CLARIFY}/clarify`, {
       method: "POST",
       body: JSON.stringify(payload),

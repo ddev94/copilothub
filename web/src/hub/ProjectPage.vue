@@ -53,14 +53,36 @@ function openFeature(featureId: string) {
           </button>
           <div>
             <h1 class="text-xl font-bold">{{ project?.name ?? "Project" }}</h1>
-            <p class="text-xs text-muted-foreground mt-0.5">Project features</p>
+            <div class="flex items-center gap-2 mt-0.5">
+              <p class="text-xs text-muted-foreground">Project features</p>
+              <span
+                v-if="project?.repoCloned"
+                class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-green-500/10 text-green-500 border border-green-500/20"
+              >
+                ✓
+                {{
+                  project.repoURL
+                    ?.replace(/^https?:\/\/github\.com\//, "")
+                    .replace(/\.git$/, "")
+                }}
+                <template v-if="project.repoBranch">
+                  · {{ project.repoBranch }}
+                </template>
+              </span>
+              <span
+                v-else
+                class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground"
+              >
+                No repository
+              </span>
+            </div>
           </div>
         </div>
         <button
-          class="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-md px-3 py-1.5 transition-colors hover:bg-muted"
-          @click="router.push('/settings')"
+          class="text-xs px-3 py-1.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+          @click="router.push(`/projects/${projectId}/settings`)"
         >
-          Settings
+          ⚙ Settings
         </button>
       </div>
     </header>

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -12,9 +13,12 @@ import (
 
 // Project represents a registered project.
 type Project struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	CreatedAt string `json:"createdAt"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	CreatedAt  string `json:"createdAt"`
+	RepoURL    string `json:"repoURL,omitempty"`
+	RepoBranch string `json:"repoBranch,omitempty"`
+	RepoCloned bool   `json:"repoCloned,omitempty"`
 }
 
 // Store manages the list of projects stored in ~/.copilothub/projects.json.
@@ -122,6 +126,78 @@ func (s *Store) save(projects []Project) error {
 		return err
 	}
 	return os.WriteFile(s.filePath(), data, 0644)
+}
+
+// SourceDir returns the cloned source directory for a project.
+func (s *Store) SourceDir(projectID string) string {
+	return filepath.Join(s.ProjectDir(projectID), "source")
+}
+
+// Update replaces the project with the given ID.
+func (s *Store) Update(p *Project) error {
+	projects, err := s.List()
+	if err != nil {
+		return err
+	}
+	found := false
+	for i, existing := range projects {
+		if existing.ID == p.ID {
+			projects[i] = *p
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("project not found: %s", p.ID)
+	}
+	return s.save(projects)
+}
+
+// ConnectRepo clones a GitHub repository into the project's source directory.
+func (s *Store) ConnectRepo(projectID, repoURL, branch string) error {
+	p, err := s.Get(projectID)
+	if err != nil {
+		return err
+	}
+
+	srcDir := s.SourceDir(projectID)
+
+	// Remove existing source if any
+	_ = os.RemoveAll(srcDir)
+
+	args := []string{"clone", "--depth", "1"}
+	if branch != "" {
+		args = append(args, "--branch", branch)
+	}
+	args = append(args, repoURL, srcDir)
+
+	cmd := exec.Command("git", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git clone failed: %w", err)
+	}
+
+	p.RepoURL = repoURL
+	p.RepoBranch = branch
+	p.RepoCloned = true
+	return s.Update(p)
+}
+
+// DisconnectRepo removes the cloned source and clears repo info.
+func (s *Store) DisconnectRepo(projectID string) error {
+	p, err := s.Get(projectID)
+	if err != nil {
+		return err
+	}
+
+	srcDir := s.SourceDir(projectID)
+	_ = os.RemoveAll(srcDir)
+
+	p.RepoURL = ""
+	p.RepoBranch = ""
+	p.RepoCloned = false
+	return s.Update(p)
 }
 
 // DefaultBaseDir returns the default data directory (~/.copilothub).

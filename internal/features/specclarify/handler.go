@@ -3,6 +3,7 @@ package specclarify
 import (
 	"context"
 	"copilothub/internal/ai"
+	"copilothub/internal/project"
 	"copilothub/internal/repo"
 	"encoding/json"
 	"fmt"
@@ -19,12 +20,14 @@ func aiContext(r *http.Request) (context.Context, context.CancelFunc) {
 
 // Handler handles all spec-clarify operations.
 type Handler struct {
-	provider ai.Provider
+	provider     ai.Provider
+	projectStore *project.Store
 }
 
-func NewHandler(provider ai.Provider) *Handler {
+func NewHandler(provider ai.Provider, projectStore *project.Store) *Handler {
 	return &Handler{
-		provider: provider,
+		provider:     provider,
+		projectStore: projectStore,
 	}
 }
 
@@ -124,6 +127,7 @@ type clarifyReq struct {
 	Mode        string `json:"mode"` // "source" | "wiki"
 	WikiContent string `json:"wikiContent"`
 	ProjectPath string `json:"projectPath"`
+	ProjectID   string `json:"projectId"`
 }
 
 type clarifyIssue struct {
@@ -175,8 +179,16 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		prompt.WriteString("Analyze the spec against the wiki content. Identify issues and generate Q&A for ambiguous points.")
 	default: // "source"
 		systemPrompt = clarifyWithSourcePrompt
-		if req.ProjectPath != "" {
-			scanner := repo.NewScanner(req.ProjectPath)
+		// Resolve project source directory from projectId
+		projectPath := req.ProjectPath
+		if projectPath == "" && req.ProjectID != "" && h.projectStore != nil {
+			p, err := h.projectStore.Get(req.ProjectID)
+			if err == nil && p.RepoCloned {
+				projectPath = h.projectStore.SourceDir(req.ProjectID)
+			}
+		}
+		if projectPath != "" {
+			scanner := repo.NewScanner(projectPath)
 			info, _ := scanner.Scan()
 			appendRepoContext(&prompt, info)
 		}

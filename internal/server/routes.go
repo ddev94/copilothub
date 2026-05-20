@@ -56,7 +56,12 @@ func setupRoutes(mux *http.ServeMux, dataDir string) {
 	mux.HandleFunc("GET /api/projects", projH.List)
 	mux.HandleFunc("GET /api/projects/{id}", projH.Get)
 	mux.HandleFunc("POST /api/projects", projH.Create)
+	mux.HandleFunc("PUT /api/projects/{id}", projH.Update)
 	mux.HandleFunc("DELETE /api/projects/{id}", projH.Delete)
+	mux.HandleFunc("POST /api/projects/{id}/connect-repo", projH.ConnectRepo)
+	mux.HandleFunc("POST /api/projects/{id}/disconnect-repo", projH.DisconnectRepo)
+	mux.HandleFunc("POST /api/projects/{id}/change-branch", projH.ChangeBranch)
+	mux.HandleFunc("GET /api/projects/{id}/repo-info", projH.RepoInfo)
 
 	mux.HandleFunc("GET /api/auth/status", func(w http.ResponseWriter, r *http.Request) {
 		cliPath := ai.FindCLI()
