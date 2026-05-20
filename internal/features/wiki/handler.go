@@ -246,12 +246,12 @@ func (h *Handler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListPending(w http.ResponseWriter, r *http.Request) {
-	if h.client == nil {
+	if h.kc.Load() == nil {
 		writeJSON(w, map[string]any{"documents": []knowledge.Document{}})
 		return
 	}
 	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
-	docs, err := h.client.PendingDocuments(r.Context(), projectID(projectPath))
+	docs, err := h.kc.Load().PendingDocuments(r.Context(), projectID(projectPath))
 	if err != nil {
 		writeError(w, "failed to list pending: "+err.Error(), http.StatusBadGateway)
 		return
@@ -260,7 +260,7 @@ func (h *Handler) ListPending(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ApproveDocument(w http.ResponseWriter, r *http.Request) {
-	if h.client == nil {
+	if h.kc.Load() == nil {
 		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
 		return
 	}
@@ -270,7 +270,7 @@ func (h *Handler) ApproveDocument(w http.ResponseWriter, r *http.Request) {
 	if approvedBy == "" {
 		approvedBy = "user"
 	}
-	if err := h.client.ApproveDocument(r.Context(), projectID(projectPath), docID, approvedBy); err != nil {
+	if err := h.kc.Load().ApproveDocument(r.Context(), projectID(projectPath), docID, approvedBy); err != nil {
 		writeError(w, "approve failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -278,13 +278,13 @@ func (h *Handler) ApproveDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) RejectDocument(w http.ResponseWriter, r *http.Request) {
-	if h.client == nil {
+	if h.kc.Load() == nil {
 		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
 		return
 	}
 	docID := r.PathValue("id")
 	projectPath := h.resolveProjectPath(r.URL.Query().Get("projectPath"))
-	if err := h.client.RejectDocument(r.Context(), projectID(projectPath), docID); err != nil {
+	if err := h.kc.Load().RejectDocument(r.Context(), projectID(projectPath), docID); err != nil {
 		writeError(w, "reject failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -292,7 +292,7 @@ func (h *Handler) RejectDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ApproveAll(w http.ResponseWriter, r *http.Request) {
-	if h.client == nil {
+	if h.kc.Load() == nil {
 		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
 		return
 	}
@@ -301,7 +301,7 @@ func (h *Handler) ApproveAll(w http.ResponseWriter, r *http.Request) {
 	if approvedBy == "" {
 		approvedBy = "user"
 	}
-	count, err := h.client.ApproveAllPending(r.Context(), projectID(projectPath), approvedBy)
+	count, err := h.kc.Load().ApproveAllPending(r.Context(), projectID(projectPath), approvedBy)
 	if err != nil {
 		writeError(w, "approve all failed: "+err.Error(), http.StatusBadGateway)
 		return
@@ -408,12 +408,12 @@ func detectIntent(question string) string {
 }
 
 func (h *Handler) expandByGraph(ctx context.Context, projectID, question string, chunks []knowledge.Chunk) []knowledge.Chunk {
-	nodes, err := h.client.SearchGraphNodes(ctx, projectID, question)
+	nodes, err := h.kc.Load().SearchGraphNodes(ctx, projectID, question)
 	if err != nil || len(nodes) == 0 {
 		return chunks
 	}
 	for _, node := range nodes {
-		neighbors, edges, err := h.client.GetGraphNeighbors(ctx, projectID, node.ID, 1)
+		neighbors, edges, err := h.kc.Load().GetGraphNeighbors(ctx, projectID, node.ID, 1)
 		if err != nil {
 			continue
 		}
