@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import SpecDiffView from "@/components/SpecDiffView.vue";
 import type { ClarifyResponse } from "@/types";
 
 const route = useRoute();
@@ -69,6 +70,8 @@ const answers = ref<Record<string, string>>({});
 const refining = ref(false);
 const refineError = ref("");
 const refinedSpec = ref("");
+const showDiff = ref(true); // default: show diff view
+const fixingIssueId = ref<string | null>(null); // which issue is being fixed individually
 
 // ── Computed ─────────────────────────────────────────────────────────
 const needsWiki = computed(() => clarifyMode.value === "wiki");
@@ -117,7 +120,7 @@ async function runClarify() {
       answers.value[q.id] = q.defaultAnswer;
     }
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "Phân tích thất bại";
+    error.value = e instanceof Error ? e.message : "Review thất bại";
   } finally {
     loading.value = false;
   }
@@ -143,10 +146,43 @@ async function runRefine() {
       answers: answers.value,
     });
     refinedSpec.value = res.refinedSpec;
+    showDiff.value = true;
   } catch (e) {
     refineError.value = e instanceof Error ? e.message : "Cập nhật thất bại";
   } finally {
     refining.value = false;
+  }
+}
+
+async function runFixIssue(issueId: string) {
+  if (!result.value || fixingIssueId.value) return;
+  const issue = result.value.issues.find((i) => i.id === issueId);
+  if (!issue) return;
+
+  fixingIssueId.value = issueId;
+  refineError.value = "";
+  refinedSpec.value = "";
+
+  // Include only answers for questions linked to this issue
+  const linkedAnswers: Record<string, string> = {};
+  for (const q of result.value.questions) {
+    if (q.issueId === issueId && answers.value[q.id]) {
+      linkedAnswers[q.id] = answers.value[q.id];
+    }
+  }
+
+  try {
+    const res = await api.refineSpec({
+      spec: specText.value,
+      issues: [issue],
+      answers: linkedAnswers,
+    });
+    refinedSpec.value = res.refinedSpec;
+    showDiff.value = true;
+  } catch (e) {
+    refineError.value = e instanceof Error ? e.message : "Fix thất bại";
+  } finally {
+    fixingIssueId.value = null;
   }
 }
 
@@ -163,6 +199,20 @@ async function copyRefinedSpec() {
 }
 
 // ── UI helpers ───────────────────────────────────────────────────────
+
+// Set of issue IDs that have at least one linked question
+const issueIdsWithQuestions = computed(() => {
+  const s = new Set<string>();
+  for (const q of result.value?.questions ?? []) {
+    if (q.issueId) s.add(q.issueId);
+  }
+  return s;
+});
+
+function issueTitle(issueId: string) {
+  return result.value?.issues.find((i) => i.id === issueId)?.title ?? issueId;
+}
+
 function severityClass(severity: string) {
   switch (severity) {
     case "high":
@@ -187,12 +237,21 @@ function severityBadgeVariant(severity: string) {
 
 function categoryIcon(category: string) {
   switch (category) {
+    case "missing_flow":
+      return "🔀";
+    case "missing_edge_case":
+      return "⚠️";
+    case "missing_constraint":
+      return "📏";
+    case "ambiguity":
+      return "❓";
+    case "inaccuracy":
+      return "✗";
+    // legacy fallbacks
     case "gap":
       return "⚡";
     case "conflict":
       return "⚠️";
-    case "ambiguity":
-      return "❓";
     case "suggestion":
       return "💡";
     default:
@@ -202,12 +261,21 @@ function categoryIcon(category: string) {
 
 function categoryLabel(category: string) {
   switch (category) {
+    case "missing_flow":
+      return "Thiếu luồng";
+    case "missing_edge_case":
+      return "Thiếu edge case";
+    case "missing_constraint":
+      return "Thiếu ràng buộc";
+    case "ambiguity":
+      return "Mơ hồ";
+    case "inaccuracy":
+      return "Sai";
+    // legacy fallbacks
     case "gap":
       return "Thiếu";
     case "conflict":
       return "Mâu thuẫn";
-    case "ambiguity":
-      return "Không rõ";
     case "suggestion":
       return "Gợi ý";
     default:
@@ -263,7 +331,7 @@ function categoryLabel(category: string) {
           <Label
             class="text-xs font-semibold text-muted-foreground uppercase tracking-wide"
           >
-            So sánh với
+            Kiểm tra spec với
           </Label>
           <div class="grid grid-cols-2 gap-2">
             <button
@@ -272,13 +340,13 @@ function categoryLabel(category: string) {
                   value: 'source',
                   label: 'Source Code',
                   icon: '💻',
-                  desc: 'So sánh spec với codebase hiện tại',
+                  desc: 'Kiểm tra spec với codebase thực tế',
                 },
                 {
                   value: 'wiki',
                   label: 'Wiki / Docs',
                   icon: '📖',
-                  desc: 'So sánh spec với tài liệu wiki',
+                  desc: 'Kiểm tra spec với tài liệu wiki',
                 },
               ]"
               :key="m.value"
@@ -370,9 +438,9 @@ function categoryLabel(category: string) {
               <span
                 class="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin"
               />
-              Đang phân tích...
+              Đang review...
             </span>
-            <span v-else>🔎 Phân tích Spec</span>
+            <span v-else>🔎 Review Spec</span>
           </Button>
         </div>
       </div>
@@ -384,7 +452,7 @@ function categoryLabel(category: string) {
       <div
         class="px-5 py-3 border-b border-border flex items-center justify-between shrink-0"
       >
-        <p class="text-sm font-semibold">Kết quả phân tích</p>
+        <p class="text-sm font-semibold">Kết quả review</p>
         <div v-if="result" class="flex items-center gap-1.5">
           <Badge
             v-if="clarifyMode === 'source'"
@@ -476,18 +544,39 @@ function categoryLabel(category: string) {
                   >
                     {{ categoryLabel(issue.category) }}
                   </span>
+                  <span
+                    v-if="issueIdsWithQuestions.has(issue.id)"
+                    class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-background/60 border border-current/20"
+                    title="Có câu hỏi cần xác nhận"
+                  >
+                    ❓
+                  </span>
                 </div>
               </div>
               <p class="text-xs leading-relaxed opacity-90">
                 {{ issue.description }}
               </p>
-              <div class="border-t border-current/20 pt-2">
-                <p class="text-[10px] font-medium opacity-70 mb-0.5">
-                  💡 Gợi ý:
-                </p>
-                <p class="text-xs leading-relaxed opacity-80 italic">
-                  {{ issue.suggestion }}
-                </p>
+              <div class="border-t border-current/20 pt-2 flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                  <p class="text-[10px] font-medium opacity-70 mb-0.5">
+                    💡 Gợi ý:
+                  </p>
+                  <p class="text-xs leading-relaxed opacity-80 italic">
+                    {{ issue.suggestion }}
+                  </p>
+                </div>
+                <button
+                  class="shrink-0 flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded border transition-colors bg-background/70 border-current/30 hover:bg-background opacity-80 hover:opacity-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                  :disabled="!!fixingIssueId || refining"
+                  @click="runFixIssue(issue.id)"
+                >
+                  <span
+                    v-if="fixingIssueId === issue.id"
+                    class="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin"
+                  />
+                  <span v-else>✦</span>
+                  {{ fixingIssueId === issue.id ? "Đang fix..." : "Fix" }}
+                </button>
               </div>
             </div>
           </div>
@@ -505,8 +594,7 @@ function categoryLabel(category: string) {
               </Badge>
             </div>
             <p class="text-xs text-muted-foreground">
-              Spec có một số điểm chưa rõ. Vui lòng xem xét và trả lời để hoàn
-              thiện spec.
+              Trả lời để cung cấp thêm thông tin giải quyết các vấn đề phát hiện.
             </p>
 
             <Card
@@ -515,9 +603,18 @@ function categoryLabel(category: string) {
               class="overflow-hidden"
             >
               <CardContent class="p-4 space-y-2">
-                <Label class="text-sm font-medium">
-                  {{ idx + 1 }}. {{ q.question }}
-                </Label>
+                <div class="flex items-start justify-between gap-2">
+                  <Label class="text-sm font-medium flex-1">
+                    {{ idx + 1 }}. {{ q.question }}
+                  </Label>
+                  <span
+                    v-if="q.issueId"
+                    class="text-[10px] shrink-0 px-1.5 py-0.5 rounded border border-border bg-muted/50 text-muted-foreground whitespace-nowrap"
+                    :title="`Giải quyết: ${issueTitle(q.issueId)}`"
+                  >
+                    ↳ {{ issueTitle(q.issueId) }}
+                  </span>
+                </div>
                 <p
                   v-if="q.context"
                   class="text-xs text-muted-foreground leading-relaxed bg-muted/40 rounded px-2.5 py-1.5"
@@ -568,7 +665,7 @@ function categoryLabel(category: string) {
             <Button
               class="w-full h-10"
               variant="default"
-              :disabled="refining"
+              :disabled="refining || !!fixingIssueId"
               @click="runRefine"
             >
               <span v-if="refining" class="flex items-center gap-2">
@@ -577,7 +674,7 @@ function categoryLabel(category: string) {
                 />
                 Đang cập nhật spec...
               </span>
-              <span v-else>✏️ Cập nhật Spec theo phân tích</span>
+              <span v-else>✏️ Fix tất cả vấn đề</span>
             </Button>
 
             <p v-if="refineError" class="text-xs text-destructive">
@@ -593,6 +690,23 @@ function categoryLabel(category: string) {
                   Spec đã cập nhật
                 </p>
                 <div class="flex gap-1.5">
+                  <!-- Diff / Text toggle -->
+                  <div class="flex rounded border border-border overflow-hidden">
+                    <button
+                      class="px-2 py-1 text-[11px] transition-colors"
+                      :class="showDiff ? 'bg-primary text-primary-foreground' : 'bg-muted/30 text-muted-foreground hover:bg-muted/60'"
+                      @click="showDiff = true"
+                    >
+                      Diff
+                    </button>
+                    <button
+                      class="px-2 py-1 text-[11px] transition-colors"
+                      :class="!showDiff ? 'bg-primary text-primary-foreground' : 'bg-muted/30 text-muted-foreground hover:bg-muted/60'"
+                      @click="showDiff = false"
+                    >
+                      Text
+                    </button>
+                  </div>
                   <Button
                     variant="outline"
                     size="sm"
@@ -607,11 +721,21 @@ function categoryLabel(category: string) {
                     class="h-7 text-xs px-2"
                     @click="applyRefinedSpec"
                   >
-                    Apply vào input
+                    Apply
                   </Button>
                 </div>
               </div>
+
+              <!-- Diff view -->
+              <SpecDiffView
+                v-if="showDiff"
+                :original="specText"
+                :revised="refinedSpec"
+              />
+
+              <!-- Plain text view -->
               <Textarea
+                v-else
                 :model-value="refinedSpec"
                 readonly
                 class="text-xs leading-relaxed resize-none bg-muted/30"
@@ -629,7 +753,7 @@ function categoryLabel(category: string) {
           <span class="text-5xl opacity-15">🔍</span>
           <p class="text-sm text-muted-foreground">
             Paste spec vào bên trái, chọn nguồn so sánh,<br />
-            rồi nhấn "Phân tích Spec" để bắt đầu.
+            rồi nhấn "Review Spec" để bắt đầu.
           </p>
           <p class="text-xs text-muted-foreground/60">
             AI sẽ phân tích spec và chỉ ra các điểm chưa đúng,<br />

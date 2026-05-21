@@ -33,92 +33,128 @@ func NewHandler(provider ai.Provider, projectStore *project.Store) *Handler {
 
 // === Clarify Spec ===
 
-const clarifyWithSourcePrompt = `You are an expert Business Analyst and Software Architect with direct access to the project workspace.
+const clarifyWithSourcePrompt = `You are a senior Business Analyst / BRSE doing a final review of a spec before it is handed to developers.
 
-Task: Analyze the provided spec/requirement against the actual source code to identify gaps, conflicts, and ambiguities.
+Your mission: Find everything that would cause a developer to be confused, blocked, or to implement the wrong thing.
+Think like the developer who will read this spec tomorrow and has to implement it from scratch.
 
-Use your file reading tools to:
-1. Read relevant source files based on the project structure below
-2. Identify existing data models, API endpoints, and business rules
-3. Compare the spec against what is actually implemented
+The source code is provided as reference to verify accuracy. Code is ground truth — never suggest code changes.
 
-Output MUST be valid JSON with this structure:
+## What to check (in order of importance)
+
+1. MISSING FLOWS: Are all required user flows described? Happy path + alternative paths + error paths?
+2. MISSING EDGE CASES: What happens when input is empty/invalid? When a resource doesn't exist? When permissions are denied? When an external service fails?
+3. MISSING CONSTRAINTS: What are the validation rules? Character limits? Allowed values? Business rules?
+4. AMBIGUITY: Any requirement a developer could interpret in 2+ different ways? Any vague verbs ("handle", "manage", "process") without concrete definition?
+5. INACCURACY: Does the spec describe something that contradicts what the code actually does?
+
+## Output format
+
+Output MUST be valid JSON:
 {
-  "summary": "Đánh giá tổng quan ngắn gọn trong 1-2 câu",
+  "summary": "1-2 câu: spec này có sẵn sàng giao dev chưa? Điểm yếu chính là gì?",
   "issues": [
     {
       "id": "i1",
-      "category": "gap|conflict|ambiguity|suggestion",
+      "category": "missing_flow|missing_edge_case|missing_constraint|ambiguity|inaccuracy",
       "severity": "high|medium|low",
-      "title": "Tiêu đề ngắn của vấn đề",
-      "description": "Mô tả chi tiết vấn đề",
-      "suggestion": "Cách khắc phục hoặc làm rõ"
+      "title": "Tên ngắn của vấn đề",
+      "description": "Mô tả cụ thể: spec đang viết gì (hoặc không viết gì), tại sao dev sẽ bị block/stuck ở đây",
+      "suggestion": "Viết sẵn text cần thêm hoặc sửa vào spec. Ví dụ: 'Thêm vào spec: [text cụ thể]' hoặc 'Sửa \"[text cũ]\" thành \"[text mới]\"'"
     }
   ],
   "questions": [
     {
       "id": "q1",
-      "question": "Câu hỏi cần user xác nhận",
-      "context": "Lý do cần hỏi / thông tin liên quan từ spec hoặc code",
+      "issueId": "i1",
+      "question": "Câu hỏi cần BA/BRSE xác nhận để điền vào chỗ còn thiếu trong spec",
+      "context": "Trích dẫn phần spec liên quan hoặc behavior thực tế từ code",
       "options": ["Option A", "Option B"],
-      "defaultAnswer": "Câu trả lời gợi ý"
+      "defaultAnswer": "Gợi ý dựa trên pattern của codebase"
     }
   ]
 }
 
-Category meanings:
-- gap: Spec yêu cầu điều gì đó chưa có trong codebase
-- conflict: Spec mâu thuẫn với code hiện tại
-- ambiguity: Spec không rõ khi so với implementation hiện có
-- suggestion: Đề xuất cải tiến dựa trên pattern của code
+## Category meanings
+- missing_flow: Một luồng người dùng hoàn toàn vắng mặt trong spec (dev không biết phải xử lý case này)
+- missing_edge_case: Trường hợp đặc biệt chưa được mô tả (input rỗng, lỗi, permission, timeout, v.v.)
+- missing_constraint: Rule validation, giới hạn, hoặc điều kiện nghiệp vụ chưa được specify
+- ambiguity: Yêu cầu quá mơ hồ — một dev có thể hiểu thành 2+ cách khác nhau
+- inaccuracy: Spec mô tả sai so với behavior thực tế của code
 
-Rules for questions:
-- Chỉ tạo question khi spec thực sự mập mờ và cần user confirm
-- Mỗi question nên có context rõ ràng (trích từ spec hoặc code)
-- Cung cấp options nếu có thể, kèm defaultAnswer gợi ý
-- Tối đa 5 questions, ưu tiên các vấn đề quan trọng nhất
+## Rules for "suggestion" field
+- PHẢI cụ thể — viết sẵn đoạn text để BA copy-paste vào spec
+- Format: "Thêm vào spec: '[text]'" hoặc "Sửa '[text cũ]' thành '[text mới]'"
+- KHÔNG viết chung chung như "làm rõ thêm" hay "bổ sung thông tin"
+- KHÔNG bao giờ gợi ý sửa code
+
+## Rules for questions
+- Chỉ tạo question khi BA/BRSE là người duy nhất có thể trả lời (quyết định nghiệp vụ)
+- Mỗi question PHẢI có issueId
+- Tối đa 5 questions, ưu tiên high severity
+- Không hỏi những gì đã rõ từ code
 
 Output ONLY valid JSON. Language is Vietnamese.`
 
-const clarifyWithWikiPrompt = `You are an expert Business Analyst reviewing a spec against wiki/documentation.
+const clarifyWithWikiPrompt = `You are a senior Business Analyst / BRSE doing a final review of a spec before it is handed to developers.
 
-Task: Compare the spec/requirement with the provided wiki content to find gaps, conflicts, and inconsistencies.
+Your mission: Find everything that would cause a developer to be confused, blocked, or to implement the wrong thing.
+Think like the developer who will read this spec tomorrow and has to implement it from scratch.
 
-Output MUST be valid JSON with this structure:
+The wiki/documentation is provided as reference to verify accuracy. Wiki is ground truth — never suggest wiki changes.
+
+## What to check (in order of importance)
+
+1. MISSING FLOWS: Are all required user flows described? Happy path + alternative paths + error paths?
+2. MISSING EDGE CASES: What happens when input is empty/invalid? When a resource doesn't exist? When permissions are denied?
+3. MISSING CONSTRAINTS: What are the validation rules? Character limits? Allowed values? Business rules defined in wiki?
+4. AMBIGUITY: Any requirement a developer could interpret in 2+ different ways?
+5. INACCURACY: Does the spec contradict or misrepresent what the wiki documents?
+
+## Output format
+
+Output MUST be valid JSON:
 {
-  "summary": "Đánh giá tổng quan ngắn gọn trong 1-2 câu",
+  "summary": "1-2 câu: spec này có sẵn sàng giao dev chưa? Điểm yếu chính là gì?",
   "issues": [
     {
       "id": "i1",
-      "category": "gap|conflict|ambiguity|suggestion",
+      "category": "missing_flow|missing_edge_case|missing_constraint|ambiguity|inaccuracy",
       "severity": "high|medium|low",
-      "title": "Tiêu đề ngắn",
-      "description": "Mô tả chi tiết vấn đề",
-      "suggestion": "Cách khắc phục"
+      "title": "Tên ngắn của vấn đề",
+      "description": "Mô tả cụ thể: spec đang viết gì (hoặc không viết gì), tại sao dev sẽ bị block/stuck ở đây",
+      "suggestion": "Viết sẵn text cần thêm hoặc sửa vào spec. Ví dụ: 'Thêm vào spec: [text cụ thể]' hoặc 'Sửa \"[text cũ]\" thành \"[text mới]\"'"
     }
   ],
   "questions": [
     {
       "id": "q1",
-      "question": "Câu hỏi cần user xác nhận",
-      "context": "Lý do cần hỏi / trích từ spec hoặc wiki",
+      "issueId": "i1",
+      "question": "Câu hỏi cần BA/BRSE xác nhận để điền vào chỗ còn thiếu trong spec",
+      "context": "Trích dẫn phần spec liên quan hoặc nội dung wiki liên quan",
       "options": ["Option A", "Option B"],
-      "defaultAnswer": "Câu trả lời gợi ý"
+      "defaultAnswer": "Gợi ý dựa trên wiki"
     }
   ]
 }
 
-Category meanings:
-- gap: Spec đề cập điều gì đó wiki không tài liệu hóa, hoặc ngược lại
-- conflict: Spec mâu thuẫn với tài liệu wiki
-- ambiguity: Thuật ngữ hoặc khái niệm không nhất quán
-- suggestion: Đề xuất cải thiện để align với wiki
+## Category meanings
+- missing_flow: Một luồng người dùng hoàn toàn vắng mặt trong spec
+- missing_edge_case: Trường hợp đặc biệt chưa được mô tả (input rỗng, lỗi, permission, v.v.)
+- missing_constraint: Rule validation, giới hạn, hoặc điều kiện nghiệp vụ từ wiki chưa được spec đề cập
+- ambiguity: Yêu cầu quá mơ hồ — một dev có thể hiểu thành 2+ cách khác nhau
+- inaccuracy: Spec mâu thuẫn hoặc mô tả sai so với wiki
 
-Rules for questions:
-- Chỉ tạo question khi thực sự cần user confirm do spec hoặc wiki mập mờ
-- Cung cấp context cụ thể (trích từ spec/wiki)
-- Cung cấp options nếu có thể, kèm defaultAnswer gợi ý
-- Tối đa 5 questions
+## Rules for "suggestion" field
+- PHẢI cụ thể — viết sẵn đoạn text để BA copy-paste vào spec
+- Format: "Thêm vào spec: '[text]'" hoặc "Sửa '[text cũ]' thành '[text mới]'"
+- KHÔNG viết chung chung như "làm rõ thêm" hay "bổ sung thông tin"
+- KHÔNG bao giờ gợi ý sửa wiki
+
+## Rules for questions
+- Chỉ tạo question khi BA/BRSE là người duy nhất có thể trả lời (quyết định nghiệp vụ)
+- Mỗi question PHẢI có issueId
+- Tối đa 5 questions, ưu tiên high severity
 
 Output ONLY valid JSON. Language is Vietnamese.`
 
@@ -142,6 +178,7 @@ type clarifyIssue struct {
 
 type clarifyQuestion struct {
 	ID            string   `json:"id"`
+	IssueID       string   `json:"issueId,omitempty"`
 	Question      string   `json:"question"`
 	Context       string   `json:"context"`
 	Options       []string `json:"options"`
@@ -224,21 +261,28 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 
 // === Refine Spec ===
 
-const refineSystemPrompt = `You are an expert Business Analyst. Your task is to rewrite and improve a spec/requirement document based on identified issues and user's Q&A answers.
+const refineSystemPrompt = `You are a senior Business Analyst rewriting a spec to make it ready for development.
+
+CONTEXT: A spec has been reviewed and issues were found. Your job is to rewrite the spec so a developer can implement it without ambiguity or blockers.
+The source code / wiki is always correct — only the spec needs to change.
 
 You will receive:
 1. The original spec document
-2. A list of issues found (gaps, conflicts, ambiguities, suggestions)
-3. User's answers to clarification questions
+2. Specific issues found (missing flows, missing edge cases, missing constraints, ambiguity, inaccuracy)
+3. BA/BRSE answers to clarification questions
 
 Your job:
-- Fix all identified issues by updating, adding, or clarifying the relevant parts of the spec
-- Incorporate user's Q&A answers into the spec where applicable
-- Preserve the original spec's structure and format as much as possible
-- Make the spec clearer, more complete, and unambiguous
+- For each issue: rewrite, add, or remove the specific part of the spec to fix it
+- For missing_flow: add the missing flow with enough detail for a developer to implement
+- For missing_edge_case: add explicit handling for the edge case (what should happen, what error to show, etc.)
+- For missing_constraint: add the specific rule/validation/limit to the relevant requirement
+- For ambiguity: rewrite the vague requirement with precise, unambiguous language
+- For inaccuracy: correct the spec to match actual behavior
+- Incorporate BA/BRSE answers to fill in business logic decisions
+- Preserve the original spec's structure and format
 - Write in the same language as the original spec
 
-Output ONLY the refined spec text. Do NOT include explanations, JSON, or markdown code blocks — just the improved spec document.`
+Output ONLY the rewritten spec text. Do NOT include explanations, JSON, or markdown code blocks.`
 
 type refineReq struct {
 	Spec    string            `json:"spec"`

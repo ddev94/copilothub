@@ -133,6 +133,7 @@ export interface ClarifyIssue {
 
 export interface ClarifyQuestion {
   id: string;
+  issueId?: string;
   question: string;
   context: string;
   options: string[];
