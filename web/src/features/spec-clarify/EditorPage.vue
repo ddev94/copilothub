@@ -17,11 +17,42 @@ const projectStore = useProjectStore();
 projectStore.fetch();
 
 const projectId = computed(() => route.params.projectId as string);
+const currentProject = computed(
+  () => projectStore.projects.find((p) => p.id === projectId.value) ?? null,
+);
+const projectRepos = computed(() => currentProject.value?.repositories ?? []);
 
 // ── Input state ──────────────────────────────────────────────────────
 const specText = ref("");
 type ClarifyMode = "source" | "wiki";
 const clarifyMode = ref<ClarifyMode>("source");
+
+// Repos explicitly excluded (empty = use all repos)
+const deselectedRepoIds = ref<string[]>([]);
+
+function toggleRepo(repoId: string) {
+  const idx = deselectedRepoIds.value.indexOf(repoId);
+  if (idx === -1) {
+    deselectedRepoIds.value.push(repoId); // exclude this repo
+  } else {
+    deselectedRepoIds.value.splice(idx, 1); // re-include
+  }
+}
+
+// IDs to send to API: all repos minus deselected; undefined = use all
+const effectiveRepoIds = computed<string[] | undefined>(() => {
+  if (deselectedRepoIds.value.length === 0) return undefined;
+  return projectRepos.value
+    .filter((r) => !deselectedRepoIds.value.includes(r.id))
+    .map((r) => r.id);
+});
+
+function repoDisplayName(repoURL: string, name?: string) {
+  return (
+    name ||
+    repoURL.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "")
+  );
+}
 
 // Wiki
 const wikiError = ref("");
@@ -78,6 +109,7 @@ async function runClarify() {
       mode: clarifyMode.value,
       wikiContent,
       projectId: projectId.value,
+      repoIds: effectiveRepoIds.value,
     });
     result.value = res;
     // Pre-fill Q&A answers with defaults
@@ -265,6 +297,50 @@ function categoryLabel(category: string) {
               </div>
               <p class="text-[11px] mt-0.5 opacity-80">{{ m.desc }}</p>
             </button>
+          </div>
+
+          <!-- Repo selector (source mode, multi-repo) -->
+          <div
+            v-if="clarifyMode === 'source' && projectRepos.length > 1"
+            class="space-y-2"
+          >
+            <p class="text-[11px] text-muted-foreground font-medium uppercase tracking-wide">
+              Repositories
+              <span class="normal-case font-normal">
+                ({{ deselectedRepoIds.length === 0
+                    ? "all"
+                    : projectRepos.length - deselectedRepoIds.length
+                }} selected)
+              </span>
+            </p>
+            <div class="flex flex-wrap gap-1.5">
+              <button
+                v-for="repo in projectRepos"
+                :key="repo.id"
+                class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] border transition-colors"
+                :class="
+                  !deselectedRepoIds.includes(repo.id)
+                    ? 'bg-primary/10 border-primary/40 text-primary'
+                    : 'bg-muted/30 border-border text-muted-foreground line-through opacity-60'
+                "
+                :disabled="loading"
+                @click="toggleRepo(repo.id)"
+              >
+                <span
+                  class="w-1.5 h-1.5 rounded-full"
+                  :class="
+                    !deselectedRepoIds.includes(repo.id)
+                      ? 'bg-primary'
+                      : 'bg-muted-foreground/40'
+                  "
+                />
+                {{ repoDisplayName(repo.repoURL, repo.name) }}
+                <template v-if="repo.repoBranch">· {{ repo.repoBranch }}</template>
+              </button>
+            </div>
+            <p class="text-[10px] text-muted-foreground">
+              Click vào repo để bỏ khỏi phân tích. Mặc định dùng tất cả.
+            </p>
           </div>
 
           <!-- Wiki info -->

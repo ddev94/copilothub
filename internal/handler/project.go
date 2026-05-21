@@ -87,11 +87,13 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, p)
 }
 
-func (h *ProjectHandler) ConnectRepo(w http.ResponseWriter, r *http.Request) {
+// AddRepo clones and registers a new repository for a project.
+func (h *ProjectHandler) AddRepo(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req struct {
 		RepoURL string `json:"repoURL"`
 		Branch  string `json:"branch"`
+		Name    string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, err.Error(), http.StatusBadRequest)
@@ -101,7 +103,37 @@ func (h *ProjectHandler) ConnectRepo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "repoURL is required", http.StatusBadRequest)
 		return
 	}
-	if err := h.store.ConnectRepo(id, req.RepoURL, req.Branch); err != nil {
+	repo, err := h.store.AddRepo(id, req.RepoURL, req.Branch, req.Name)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, repo)
+}
+
+// RemoveRepo disconnects and removes a repository from a project.
+func (h *ProjectHandler) RemoveRepo(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	repoID := r.PathValue("repoId")
+	if err := h.store.RemoveRepo(id, repoID); err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// ChangeRepoBranch re-clones a repository on a different branch.
+func (h *ProjectHandler) ChangeRepoBranch(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	repoID := r.PathValue("repoId")
+	var req struct {
+		Branch string `json:"branch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := h.store.ChangeRepoBranch(id, repoID, req.Branch); err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -109,6 +141,40 @@ func (h *ProjectHandler) ConnectRepo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, p)
 }
 
+// RepoInfo returns scanner info for the first connected repository (or a specific one).
+func (h *ProjectHandler) RepoInfo(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	p, err := h.store.Get(id)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	if len(p.Repositories) == 0 {
+		writeError(w, "no repository connected", http.StatusBadRequest)
+		return
+	}
+
+	repoID := r.URL.Query().Get("repoId")
+	if repoID == "" {
+		repoID = p.Repositories[0].ID
+	}
+
+	srcDir := h.store.RepoSourceDir(id, repoID)
+	scanner := repo.NewScanner(srcDir)
+	info, err := scanner.Scan()
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, info)
+}
+
+// ConnectRepo is kept for backward compatibility.
+func (h *ProjectHandler) ConnectRepo(w http.ResponseWriter, r *http.Request) {
+	h.AddRepo(w, r)
+}
+
+// DisconnectRepo is kept for backward compatibility — removes all repos.
 func (h *ProjectHandler) DisconnectRepo(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := h.store.DisconnectRepo(id); err != nil {
@@ -119,6 +185,7 @@ func (h *ProjectHandler) DisconnectRepo(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, p)
 }
 
+// ChangeBranch is kept for backward compatibility — changes branch of first repo.
 func (h *ProjectHandler) ChangeBranch(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	p, err := h.store.Get(id)
@@ -126,7 +193,7 @@ func (h *ProjectHandler) ChangeBranch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	if !p.RepoCloned || p.RepoURL == "" {
+	if len(p.Repositories) == 0 {
 		writeError(w, "no repository connected", http.StatusBadRequest)
 		return
 	}
@@ -137,31 +204,10 @@ func (h *ProjectHandler) ChangeBranch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := h.store.ConnectRepo(id, p.RepoURL, req.Branch); err != nil {
+	if err := h.store.ChangeRepoBranch(id, p.Repositories[0].ID, req.Branch); err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	p, _ = h.store.Get(id)
 	writeJSON(w, p)
-}
-
-func (h *ProjectHandler) RepoInfo(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	p, err := h.store.Get(id)
-	if err != nil {
-		writeError(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	if !p.RepoCloned {
-		writeError(w, "no repository connected", http.StatusBadRequest)
-		return
-	}
-	srcDir := h.store.SourceDir(id)
-	scanner := repo.NewScanner(srcDir)
-	info, err := scanner.Scan()
-	if err != nil {
-		writeError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, info)
 }

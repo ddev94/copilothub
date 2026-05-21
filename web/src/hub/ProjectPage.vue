@@ -55,20 +55,29 @@ function openFeature(featureId: string) {
             <h1 class="text-xl font-bold">{{ project?.name ?? "Project" }}</h1>
             <div class="flex items-center gap-2 mt-0.5">
               <p class="text-xs text-muted-foreground">Project features</p>
-              <span
-                v-if="project?.repoCloned"
-                class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-green-500/10 text-green-500 border border-green-500/20"
-              >
-                ✓
-                {{
-                  project.repoURL
-                    ?.replace(/^https?:\/\/github\.com\//, "")
-                    .replace(/\.git$/, "")
-                }}
-                <template v-if="project.repoBranch">
-                  · {{ project.repoBranch }}
-                </template>
-              </span>
+              <template v-if="project?.repositories && project.repositories.length > 0">
+                <span
+                  v-if="project.repositories.length === 1"
+                  class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-green-500/10 text-green-500 border border-green-500/20"
+                >
+                  ✓
+                  {{
+                    (project.repositories[0].name ||
+                      project.repositories[0].repoURL
+                        .replace(/^https?:\/\/github\.com\//, "")
+                        .replace(/\.git$/, ""))
+                  }}
+                  <template v-if="project.repositories[0].repoBranch">
+                    · {{ project.repositories[0].repoBranch }}
+                  </template>
+                </span>
+                <span
+                  v-else
+                  class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-green-500/10 text-green-500 border border-green-500/20"
+                >
+                  ✓ {{ project.repositories.length }} repositories
+                </span>
+              </template>
               <span
                 v-else
                 class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground"

@@ -6,16 +6,29 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
 
+// Repository represents a single connected git repository within a project.
+type Repository struct {
+	ID         string `json:"id"`
+	Name       string `json:"name,omitempty"`
+	RepoURL    string `json:"repoURL"`
+	RepoBranch string `json:"repoBranch,omitempty"`
+	RepoCloned bool   `json:"repoCloned"`
+}
+
 // Project represents a registered project.
 type Project struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	CreatedAt  string `json:"createdAt"`
+	ID           string       `json:"id"`
+	Name         string       `json:"name"`
+	CreatedAt    string       `json:"createdAt"`
+	Repositories []Repository `json:"repositories,omitempty"`
+
+	// Deprecated legacy single-repo fields — kept for JSON migration only.
 	RepoURL    string `json:"repoURL,omitempty"`
 	RepoBranch string `json:"repoBranch,omitempty"`
 	RepoCloned bool   `json:"repoCloned,omitempty"`
@@ -43,7 +56,68 @@ func (s *Store) filePath() string {
 	return filepath.Join(s.baseDir, "projects.json")
 }
 
-// List returns all registered projects.
+// RepoSourceDir returns the clone directory for a specific repository.
+// The special ID "legacy" maps to the old single-repo "source/" path.
+func (s *Store) RepoSourceDir(projectID, repoID string) string {
+	if repoID == "legacy" {
+		return filepath.Join(s.ProjectDir(projectID), "source")
+	}
+	return filepath.Join(s.ProjectDir(projectID), "repos", repoID)
+}
+
+// SourceDir returns the source directory of the first connected repository.
+// Kept for backward compatibility with features that predate multi-repo support.
+func (s *Store) SourceDir(projectID string) string {
+	p, err := s.Get(projectID)
+	if err != nil || len(p.Repositories) == 0 {
+		return filepath.Join(s.ProjectDir(projectID), "source")
+	}
+	return s.RepoSourceDir(projectID, p.Repositories[0].ID)
+}
+
+// SourceDirsForRepos returns clone directories for the given repo IDs.
+// If repoIDs is empty, all cloned repos are returned.
+func (s *Store) SourceDirsForRepos(projectID string, repoIDs []string) []string {
+	p, err := s.Get(projectID)
+	if err != nil {
+		return nil
+	}
+	idSet := make(map[string]bool, len(repoIDs))
+	for _, id := range repoIDs {
+		idSet[id] = true
+	}
+	var dirs []string
+	for _, r := range p.Repositories {
+		if !r.RepoCloned {
+			continue
+		}
+		if len(repoIDs) == 0 || idSet[r.ID] {
+			dirs = append(dirs, s.RepoSourceDir(projectID, r.ID))
+		}
+	}
+	return dirs
+}
+
+// migrateProject converts the legacy single-repo fields into the Repositories slice.
+func migrateProject(p *Project) {
+	if p.RepoURL != "" && len(p.Repositories) == 0 {
+		name := filepath.Base(strings.TrimSuffix(p.RepoURL, ".git"))
+		p.Repositories = []Repository{
+			{
+				ID:         "legacy",
+				Name:       name,
+				RepoURL:    p.RepoURL,
+				RepoBranch: p.RepoBranch,
+				RepoCloned: p.RepoCloned,
+			},
+		}
+		p.RepoURL = ""
+		p.RepoBranch = ""
+		p.RepoCloned = false
+	}
+}
+
+// List returns all registered projects, migrating legacy single-repo data if present.
 func (s *Store) List() ([]Project, error) {
 	data, err := os.ReadFile(s.filePath())
 	if os.IsNotExist(err) {
@@ -55,6 +129,9 @@ func (s *Store) List() ([]Project, error) {
 	var projects []Project
 	if err := json.Unmarshal(data, &projects); err != nil {
 		return nil, err
+	}
+	for i := range projects {
+		migrateProject(&projects[i])
 	}
 	return projects, nil
 }
@@ -87,7 +164,6 @@ func (s *Store) Create(name string) (*Project, error) {
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// Create project data directory
 	if err := os.MkdirAll(s.ProjectDir(id), 0755); err != nil {
 		return nil, err
 	}
@@ -128,11 +204,6 @@ func (s *Store) save(projects []Project) error {
 	return os.WriteFile(s.filePath(), data, 0644)
 }
 
-// SourceDir returns the cloned source directory for a project.
-func (s *Store) SourceDir(projectID string) string {
-	return filepath.Join(s.ProjectDir(projectID), "source")
-}
-
 // Update replaces the project with the given ID.
 func (s *Store) Update(p *Project) error {
 	projects, err := s.List()
@@ -153,23 +224,98 @@ func (s *Store) Update(p *Project) error {
 	return s.save(projects)
 }
 
-// ConnectRepo clones a GitHub repository into the project's source directory.
-func (s *Store) ConnectRepo(projectID, repoURL, branch string) error {
+// AddRepo clones a repository and adds it to the project's repository list.
+func (s *Store) AddRepo(projectID, repoURL, branch, name string) (*Repository, error) {
 	p, err := s.Get(projectID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	srcDir := s.SourceDir(projectID)
-
-	// Remove existing source if any
-	_ = os.RemoveAll(srcDir)
+	repoID := uuid.New().String()[:8]
+	repoDir := s.RepoSourceDir(projectID, repoID)
+	_ = os.RemoveAll(repoDir)
 
 	args := []string{"clone", "--depth", "1"}
 	if branch != "" {
 		args = append(args, "--branch", branch)
 	}
-	args = append(args, repoURL, srcDir)
+	args = append(args, repoURL, repoDir)
+
+	cmd := exec.Command("git", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("git clone failed: %w", err)
+	}
+
+	repoName := name
+	if repoName == "" {
+		repoName = filepath.Base(strings.TrimSuffix(repoURL, ".git"))
+	}
+
+	r := Repository{
+		ID:         repoID,
+		Name:       repoName,
+		RepoURL:    repoURL,
+		RepoBranch: branch,
+		RepoCloned: true,
+	}
+	p.Repositories = append(p.Repositories, r)
+	return &r, s.Update(p)
+}
+
+// RemoveRepo disconnects and removes a repository from the project.
+func (s *Store) RemoveRepo(projectID, repoID string) error {
+	p, err := s.Get(projectID)
+	if err != nil {
+		return err
+	}
+
+	var filtered []Repository
+	found := false
+	for _, r := range p.Repositories {
+		if r.ID == repoID {
+			found = true
+		} else {
+			filtered = append(filtered, r)
+		}
+	}
+	if !found {
+		return fmt.Errorf("repository not found: %s", repoID)
+	}
+
+	_ = os.RemoveAll(s.RepoSourceDir(projectID, repoID))
+
+	p.Repositories = filtered
+	return s.Update(p)
+}
+
+// ChangeRepoBranch re-clones a repository on the specified branch.
+func (s *Store) ChangeRepoBranch(projectID, repoID, branch string) error {
+	p, err := s.Get(projectID)
+	if err != nil {
+		return err
+	}
+
+	var target *Repository
+	for i := range p.Repositories {
+		if p.Repositories[i].ID == repoID {
+			target = &p.Repositories[i]
+			break
+		}
+	}
+	if target == nil {
+		return fmt.Errorf("repository not found: %s", repoID)
+	}
+
+	repoDir := s.RepoSourceDir(projectID, repoID)
+	_ = os.RemoveAll(repoDir)
+
+	args := []string{"clone", "--depth", "1"}
+	if branch != "" {
+		args = append(args, "--branch", branch)
+	}
+	args = append(args, target.RepoURL, repoDir)
 
 	cmd := exec.Command("git", args...)
 	cmd.Stdout = os.Stdout
@@ -178,25 +324,30 @@ func (s *Store) ConnectRepo(projectID, repoURL, branch string) error {
 		return fmt.Errorf("git clone failed: %w", err)
 	}
 
-	p.RepoURL = repoURL
-	p.RepoBranch = branch
-	p.RepoCloned = true
+	target.RepoBranch = branch
 	return s.Update(p)
 }
 
-// DisconnectRepo removes the cloned source and clears repo info.
+// ConnectRepo clones a repository into the project's legacy source directory.
+// Deprecated: use AddRepo for new projects.
+func (s *Store) ConnectRepo(projectID, repoURL, branch string) error {
+	_, err := s.AddRepo(projectID, repoURL, branch, "")
+	return err
+}
+
+// DisconnectRepo removes all repositories from a project.
+// Deprecated: use RemoveRepo for targeted removal.
 func (s *Store) DisconnectRepo(projectID string) error {
 	p, err := s.Get(projectID)
 	if err != nil {
 		return err
 	}
-
-	srcDir := s.SourceDir(projectID)
-	_ = os.RemoveAll(srcDir)
-
-	p.RepoURL = ""
-	p.RepoBranch = ""
-	p.RepoCloned = false
+	for _, r := range p.Repositories {
+		_ = os.RemoveAll(s.RepoSourceDir(projectID, r.ID))
+	}
+	// Also clean up old-style source dir
+	_ = os.RemoveAll(filepath.Join(s.ProjectDir(projectID), "source"))
+	p.Repositories = nil
 	return s.Update(p)
 }
 

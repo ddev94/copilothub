@@ -123,11 +123,12 @@ Rules for questions:
 Output ONLY valid JSON. Language is Vietnamese.`
 
 type clarifyReq struct {
-	Spec        string `json:"spec"`
-	Mode        string `json:"mode"` // "source" | "wiki"
-	WikiContent string `json:"wikiContent"`
-	ProjectPath string `json:"projectPath"`
-	ProjectID   string `json:"projectId"`
+	Spec        string   `json:"spec"`
+	Mode        string   `json:"mode"` // "source" | "wiki"
+	WikiContent string   `json:"wikiContent"`
+	ProjectPath string   `json:"projectPath"`
+	ProjectID   string   `json:"projectId"`
+	RepoIDs     []string `json:"repoIds"` // empty = all repos
 }
 
 type clarifyIssue struct {
@@ -179,16 +180,14 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		prompt.WriteString("Analyze the spec against the wiki content. Identify issues and generate Q&A for ambiguous points.")
 	default: // "source"
 		systemPrompt = clarifyWithSourcePrompt
-		// Resolve project source directory from projectId
-		projectPath := req.ProjectPath
-		if projectPath == "" && req.ProjectID != "" && h.projectStore != nil {
-			p, err := h.projectStore.Get(req.ProjectID)
-			if err == nil && p.RepoCloned {
-				projectPath = h.projectStore.SourceDir(req.ProjectID)
-			}
+		var sourcePaths []string
+		if req.ProjectPath != "" {
+			sourcePaths = []string{req.ProjectPath}
+		} else if req.ProjectID != "" && h.projectStore != nil {
+			sourcePaths = h.projectStore.SourceDirsForRepos(req.ProjectID, req.RepoIDs)
 		}
-		if projectPath != "" {
-			scanner := repo.NewScanner(projectPath)
+		for _, path := range sourcePaths {
+			scanner := repo.NewScanner(path)
 			info, _ := scanner.Scan()
 			appendRepoContext(&prompt, info)
 		}

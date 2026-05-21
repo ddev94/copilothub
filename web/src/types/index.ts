@@ -58,13 +58,19 @@ export interface KnowledgeDocument {
   approvedAt?: string;
 }
 
+export interface ProjectRepository {
+  id: string;
+  name?: string;
+  repoURL: string;
+  repoBranch?: string;
+  repoCloned: boolean;
+}
+
 export interface LocalProject {
   id: string;
   name: string;
   createdAt?: string;
-  repoURL?: string;
-  repoBranch?: string;
-  repoCloned?: boolean;
+  repositories?: ProjectRepository[];
 }
 
 export interface WikiChatChunk {

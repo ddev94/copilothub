@@ -7,6 +7,7 @@ import type {
   KnowledgeDocument,
   KnowledgeUploadResponse,
   LocalProject,
+  ProjectRepository,
   WikiChatRequest,
   WikiChatResponse,
   EmbeddingStatus,
@@ -47,17 +48,22 @@ export const api = {
         method: "PUT",
         body: JSON.stringify(payload),
       }),
-    connectRepo: (id: string, repoURL: string, branch?: string) =>
-      request<LocalProject>(`/projects/${id}/connect-repo`, {
+    addRepo: (
+      id: string,
+      repoURL: string,
+      branch?: string,
+      name?: string,
+    ) =>
+      request<ProjectRepository>(`/projects/${id}/repos`, {
         method: "POST",
-        body: JSON.stringify({ repoURL, branch: branch || "" }),
+        body: JSON.stringify({ repoURL, branch: branch || "", name: name || "" }),
       }),
-    disconnectRepo: (id: string) =>
-      request<LocalProject>(`/projects/${id}/disconnect-repo`, {
-        method: "POST",
+    removeRepo: (id: string, repoId: string) =>
+      request<{ ok: boolean }>(`/projects/${id}/repos/${repoId}`, {
+        method: "DELETE",
       }),
-    changeBranch: (id: string, branch: string) =>
-      request<LocalProject>(`/projects/${id}/change-branch`, {
+    changeRepoBranch: (id: string, repoId: string, branch: string) =>
+      request<LocalProject>(`/projects/${id}/repos/${repoId}/change-branch`, {
         method: "POST",
         body: JSON.stringify({ branch }),
       }),
@@ -67,6 +73,7 @@ export const api = {
     mode: string;
     wikiContent?: string;
     projectId?: string;
+    repoIds?: string[];
   }) =>
     request<ClarifyResponse>(`${SPEC_CLARIFY}/clarify`, {
       method: "POST",

@@ -36,24 +36,30 @@ watch(
   () => props.open,
   (v) => {
     if (v) {
-      repoURL.value = project.value?.repoURL ?? "";
-      branch.value = project.value?.repoBranch ?? "";
       error.value = null;
+      repoURL.value = "";
+      branch.value = "";
     }
   },
 );
 
-async function connectRepo() {
+const hasRepos = computed(
+  () => (project.value?.repositories?.length ?? 0) > 0,
+);
+
+async function addRepo() {
   if (!repoURL.value.trim()) return;
   connecting.value = true;
   error.value = null;
   try {
-    await api.projects.connectRepo(
+    await api.projects.addRepo(
       props.projectId,
       repoURL.value.trim(),
       branch.value.trim() || undefined,
     );
     await projectStore.fetch();
+    repoURL.value = "";
+    branch.value = "";
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to clone repository";
   } finally {
@@ -61,14 +67,12 @@ async function connectRepo() {
   }
 }
 
-async function disconnectRepo() {
+async function removeRepo(repoId: string) {
   connecting.value = true;
   error.value = null;
   try {
-    await api.projects.disconnectRepo(props.projectId);
+    await api.projects.removeRepo(props.projectId, repoId);
     await projectStore.fetch();
-    repoURL.value = "";
-    branch.value = "";
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to disconnect";
   } finally {
@@ -83,70 +87,63 @@ async function disconnectRepo() {
       <DialogHeader>
         <DialogTitle>Project Settings</DialogTitle>
         <DialogDescription>
-          Configure repository connection for
+          Manage repositories for
           <strong>{{ project?.name }}</strong>
         </DialogDescription>
       </DialogHeader>
 
       <div class="space-y-4 pt-2">
-        <!-- Repo URL -->
-        <div class="space-y-1.5">
-          <Label>Repository URL</Label>
-          <Input
-            v-model="repoURL"
-            placeholder="https://github.com/owner/repo.git"
-            :disabled="connecting || !!project?.repoCloned"
-          />
-        </div>
-
-        <!-- Branch -->
-        <div class="space-y-1.5">
-          <Label
-            >Branch
-            <span class="text-muted-foreground text-xs"
-              >(optional, defaults to main)</span
-            ></Label
-          >
-          <Input
-            v-model="branch"
-            placeholder="main"
-            :disabled="connecting || !!project?.repoCloned"
-          />
-        </div>
-
-        <!-- Status -->
-        <div
-          v-if="project?.repoCloned"
-          class="flex items-center gap-2 rounded border border-green-500/30 bg-green-500/5 px-3 py-2"
-        >
-          <span class="text-green-500 text-sm">✓</span>
-          <div class="flex-1 min-w-0">
-            <p class="text-sm font-mono truncate">{{ project.repoURL }}</p>
-            <p v-if="project.repoBranch" class="text-xs text-muted-foreground">
-              branch: {{ project.repoBranch }}
-            </p>
+        <!-- Connected repos -->
+        <div v-if="hasRepos" class="space-y-2">
+          <Label>Connected Repositories</Label>
+          <div class="space-y-1">
+            <div
+              v-for="repo in project!.repositories"
+              :key="repo.id"
+              class="flex items-center gap-2 rounded border border-green-500/30 bg-green-500/5 px-3 py-2"
+            >
+              <span class="text-green-500 text-sm">✓</span>
+              <div class="flex-1 min-w-0">
+                <p class="text-xs font-mono truncate">{{ repo.repoURL }}</p>
+                <p v-if="repo.repoBranch" class="text-xs text-muted-foreground">
+                  {{ repo.repoBranch }}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="text-destructive hover:text-destructive shrink-0"
+                :disabled="connecting"
+                @click="removeRepo(repo.id)"
+              >
+                Remove
+              </Button>
+            </div>
           </div>
         </div>
 
-        <!-- Error -->
+        <!-- Add repo form -->
+        <div class="space-y-3">
+          <Label>Add Repository</Label>
+          <Input
+            v-model="repoURL"
+            placeholder="https://github.com/owner/repo.git"
+            :disabled="connecting"
+          />
+          <Input
+            v-model="branch"
+            placeholder="Branch (optional, defaults to main)"
+            :disabled="connecting"
+          />
+        </div>
+
         <p v-if="error" class="text-xs text-destructive">{{ error }}</p>
 
-        <!-- Actions -->
         <div class="flex justify-end gap-2 pt-2">
           <Button
-            v-if="project?.repoCloned"
-            variant="outline"
-            size="sm"
-            :disabled="connecting"
-            @click="disconnectRepo"
-          >
-            {{ connecting ? "Removing…" : "Disconnect" }}
-          </Button>
-          <Button
-            v-else
             size="sm"
             :disabled="connecting || !repoURL.trim()"
-            @click="connectRepo"
+            @click="addRepo"
           >
             {{ connecting ? "Cloning…" : "Connect & Clone" }}
           </Button>
