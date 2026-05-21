@@ -82,7 +82,6 @@ export const api = {
   refineSpec: (payload: {
     spec: string;
     issues: ClarifyResponse["issues"];
-    answers: Record<string, string>;
   }) =>
     request<RefineResponse>(`${SPEC_CLARIFY}/refine`, {
       method: "POST",

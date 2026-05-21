@@ -6,8 +6,6 @@ import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import SpecDiffView from "@/components/SpecDiffView.vue";
 import type { ClarifyResponse } from "@/types";
@@ -63,15 +61,16 @@ const loading = ref(false);
 const error = ref("");
 const result = ref<ClarifyResponse | null>(null);
 
-// Q&A answers
-const answers = ref<Record<string, string>>({});
-
-// Refine state
+// ── Fix / progress state ─────────────────────────────────────────────
+const resolvedIssueIds = ref<string[]>([]);
+const pendingFix = ref<{
+  issueId: string; // '__all__' when fixing all remaining
+  revisedSpec: string;
+  showDiff: boolean;
+} | null>(null);
+const fixingIssueId = ref<string | null>(null);
 const refining = ref(false);
 const refineError = ref("");
-const refinedSpec = ref("");
-const showDiff = ref(true); // default: show diff view
-const fixingIssueId = ref<string | null>(null); // which issue is being fixed individually
 
 // ── Computed ─────────────────────────────────────────────────────────
 const needsWiki = computed(() => clarifyMode.value === "wiki");
@@ -81,6 +80,28 @@ const canRun = computed(() => {
   return true;
 });
 
+const totalIssues = computed(() => result.value?.issues.length ?? 0);
+const resolvedCount = computed(() => resolvedIssueIds.value.length);
+const specReady = computed(
+  () => totalIssues.value > 0 && resolvedCount.value >= totalIssues.value,
+);
+const unresolvedIssues = computed(
+  () => result.value?.issues.filter((i) => !resolvedIssueIds.value.includes(i.id)) ?? [],
+);
+const pendingFixIssue = computed(() =>
+  pendingFix.value?.issueId === "__all__"
+    ? null
+    : result.value?.issues.find((i) => i.id === pendingFix.value?.issueId) ?? null,
+);
+
+function isResolved(issueId: string) {
+  return resolvedIssueIds.value.includes(issueId);
+}
+
+function markResolved(issueId: string) {
+  if (!isResolved(issueId)) resolvedIssueIds.value.push(issueId);
+}
+
 // ── Actions ──────────────────────────────────────────────────────────
 async function runClarify() {
   if (!canRun.value) return;
@@ -88,7 +109,8 @@ async function runClarify() {
   error.value = "";
   wikiError.value = "";
   result.value = null;
-  answers.value = {};
+  resolvedIssueIds.value = [];
+  pendingFix.value = null;
   try {
     let wikiContent: string | undefined;
     // Auto-retrieve wiki content from current project's knowledge
@@ -115,10 +137,6 @@ async function runClarify() {
       repoIds: effectiveRepoIds.value,
     });
     result.value = res;
-    // Pre-fill Q&A answers with defaults
-    for (const q of res.questions) {
-      answers.value[q.id] = q.defaultAnswer;
-    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Review thất bại";
   } finally {
@@ -129,56 +147,46 @@ async function runClarify() {
 function clearResults() {
   result.value = null;
   error.value = "";
-  answers.value = {};
-  refinedSpec.value = "";
+  resolvedIssueIds.value = [];
+  pendingFix.value = null;
   refineError.value = "";
 }
 
+// Fix all remaining unresolved issues at once
 async function runRefine() {
   if (!result.value || refining.value) return;
   refining.value = true;
   refineError.value = "";
-  refinedSpec.value = "";
+  pendingFix.value = null;
   try {
     const res = await api.refineSpec({
       spec: specText.value,
-      issues: result.value.issues,
-      answers: answers.value,
+      issues: unresolvedIssues.value,
     });
-    refinedSpec.value = res.refinedSpec;
-    showDiff.value = true;
+    pendingFix.value = { issueId: "__all__", revisedSpec: res.refinedSpec, showDiff: true };
   } catch (e) {
-    refineError.value = e instanceof Error ? e.message : "Cập nhật thất bại";
+    refineError.value = e instanceof Error ? e.message : "Fix thất bại";
   } finally {
     refining.value = false;
   }
 }
 
+// Fix a single issue
 async function runFixIssue(issueId: string) {
-  if (!result.value || fixingIssueId.value) return;
+  if (!result.value || fixingIssueId.value || refining.value) return;
   const issue = result.value.issues.find((i) => i.id === issueId);
   if (!issue) return;
 
   fixingIssueId.value = issueId;
   refineError.value = "";
-  refinedSpec.value = "";
-
-  // Include only answers for questions linked to this issue
-  const linkedAnswers: Record<string, string> = {};
-  for (const q of result.value.questions) {
-    if (q.issueId === issueId && answers.value[q.id]) {
-      linkedAnswers[q.id] = answers.value[q.id];
-    }
-  }
+  pendingFix.value = null;
 
   try {
     const res = await api.refineSpec({
       spec: specText.value,
       issues: [issue],
-      answers: linkedAnswers,
     });
-    refinedSpec.value = res.refinedSpec;
-    showDiff.value = true;
+    pendingFix.value = { issueId, revisedSpec: res.refinedSpec, showDiff: true };
   } catch (e) {
     refineError.value = e instanceof Error ? e.message : "Fix thất bại";
   } finally {
@@ -186,32 +194,29 @@ async function runFixIssue(issueId: string) {
   }
 }
 
-function applyRefinedSpec() {
-  specText.value = refinedSpec.value;
-  refinedSpec.value = "";
-  refineError.value = "";
-  result.value = null;
-  answers.value = {};
+// Accept the pending fix — update spec in-place and mark issue(s) resolved
+function acceptFix() {
+  if (!pendingFix.value) return;
+  specText.value = pendingFix.value.revisedSpec;
+  if (pendingFix.value.issueId === "__all__") {
+    for (const issue of unresolvedIssues.value) markResolved(issue.id);
+  } else {
+    markResolved(pendingFix.value.issueId);
+  }
+  pendingFix.value = null;
 }
 
-async function copyRefinedSpec() {
-  await navigator.clipboard.writeText(refinedSpec.value);
+function rejectFix() {
+  pendingFix.value = null;
+}
+
+async function copyPendingSpec() {
+  if (pendingFix.value) {
+    await navigator.clipboard.writeText(pendingFix.value.revisedSpec);
+  }
 }
 
 // ── UI helpers ───────────────────────────────────────────────────────
-
-// Set of issue IDs that have at least one linked question
-const issueIdsWithQuestions = computed(() => {
-  const s = new Set<string>();
-  for (const q of result.value?.questions ?? []) {
-    if (q.issueId) s.add(q.issueId);
-  }
-  return s;
-});
-
-function issueTitle(issueId: string) {
-  return result.value?.issues.find((i) => i.id === issueId)?.title ?? issueId;
-}
 
 function severityClass(severity: string) {
   switch (severity) {
@@ -461,23 +466,16 @@ function categoryLabel(category: string) {
             >Source Code</Badge
           >
           <Badge v-else variant="secondary" class="text-[10px]">Wiki</Badge>
-          <Badge variant="outline" class="text-[10px]">
-            {{ result.issues.length }} vấn đề
-          </Badge>
-          <Badge
-            v-if="result.questions.length"
-            variant="outline"
-            class="text-[10px]"
+          <!-- Progress badge -->
+          <span
+            class="text-[10px] font-medium px-2 py-0.5 rounded-full border"
+            :class="specReady
+              ? 'bg-green-500/10 border-green-500/30 text-green-600'
+              : 'bg-muted border-border text-muted-foreground'"
           >
-            {{ result.questions.length }} câu hỏi
-          </Badge>
-          <Button
-            variant="ghost"
-            size="sm"
-            class="h-6 text-xs"
-            @click="clearResults"
-            >✕</Button
-          >
+            {{ specReady ? '✓ Spec ready' : `${resolvedCount}/${totalIssues} resolved` }}
+          </span>
+          <Button variant="ghost" size="sm" class="h-6 text-xs" @click="clearResults">✕</Button>
         </div>
       </div>
 
@@ -505,243 +503,144 @@ function categoryLabel(category: string) {
 
         <!-- Results -->
         <div v-else-if="result" class="p-5 space-y-5">
+
+          <!-- ── Pending fix: diff review ── -->
+          <div v-if="pendingFix" class="space-y-2 rounded-lg border border-primary/30 bg-primary/5 p-3">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-semibold text-primary">
+                {{
+                  pendingFix.issueId === '__all__'
+                    ? `✦ Fix cho ${unresolvedIssues.length} vấn đề còn lại`
+                    : `✦ Fix: ${pendingFixIssue?.title ?? ''}`
+                }}
+              </p>
+              <div class="flex items-center gap-1.5">
+                <div class="flex rounded border border-border overflow-hidden">
+                  <button
+                    class="px-2 py-0.5 text-[11px] transition-colors"
+                    :class="pendingFix.showDiff ? 'bg-primary text-primary-foreground' : 'bg-muted/30 text-muted-foreground'"
+                    @click="pendingFix.showDiff = true"
+                  >Diff</button>
+                  <button
+                    class="px-2 py-0.5 text-[11px] transition-colors"
+                    :class="!pendingFix.showDiff ? 'bg-primary text-primary-foreground' : 'bg-muted/30 text-muted-foreground'"
+                    @click="pendingFix.showDiff = false"
+                  >Text</button>
+                </div>
+                <button class="text-[11px] text-muted-foreground hover:text-foreground px-1.5" @click="copyPendingSpec">Copy</button>
+              </div>
+            </div>
+            <SpecDiffView v-if="pendingFix.showDiff" :original="specText" :revised="pendingFix.revisedSpec" />
+            <Textarea
+              v-else
+              :model-value="pendingFix.revisedSpec"
+              readonly
+              class="text-xs leading-relaxed resize-none bg-background"
+              rows="10"
+            />
+            <div class="flex gap-2 pt-1">
+              <Button size="sm" class="flex-1 h-8" @click="acceptFix">✓ Accept — cập nhật spec</Button>
+              <Button size="sm" variant="outline" class="h-8 px-3" @click="rejectFix">✕ Bỏ qua</Button>
+            </div>
+          </div>
+
           <!-- Summary -->
           <div class="bg-muted/40 rounded-lg px-4 py-3">
             <p class="text-sm leading-relaxed">{{ result.summary }}</p>
           </div>
 
           <!-- Issues -->
-          <div v-if="result.issues.length" class="space-y-3">
-            <p
-              class="text-xs font-semibold text-muted-foreground uppercase tracking-wide"
-            >
-              Các vấn đề phát hiện
+          <div v-if="result.issues.length" class="space-y-2">
+            <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              Các vấn đề ({{ resolvedCount }}/{{ totalIssues }} đã xử lý)
             </p>
             <div
               v-for="issue in result.issues"
               :key="issue.id"
-              class="rounded-lg border p-3 space-y-2"
-              :class="severityClass(issue.severity)"
+              class="rounded-lg border p-3 space-y-2 transition-opacity"
+              :class="[
+                isResolved(issue.id) ? 'opacity-40 bg-muted/30 border-border' : severityClass(issue.severity),
+              ]"
             >
               <div class="flex items-start justify-between gap-2">
                 <div class="flex items-center gap-2 flex-1 min-w-0">
-                  <span class="text-base shrink-0">{{
-                    categoryIcon(issue.category)
-                  }}</span>
-                  <p class="text-sm font-semibold leading-snug">
+                  <!-- Resolved checkmark or category icon -->
+                  <span class="text-base shrink-0">
+                    {{ isResolved(issue.id) ? '✓' : categoryIcon(issue.category) }}
+                  </span>
+                  <p class="text-sm font-semibold leading-snug" :class="isResolved(issue.id) ? 'line-through' : ''">
                     {{ issue.title }}
                   </p>
                 </div>
-                <div class="flex gap-1 shrink-0">
-                  <Badge
-                    :variant="severityBadgeVariant(issue.severity) as any"
-                    class="text-[10px]"
-                  >
-                    {{ issue.severity }}
-                  </Badge>
-                  <span
-                    class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-background/60 border border-current/20"
-                  >
-                    {{ categoryLabel(issue.category) }}
-                  </span>
-                  <span
-                    v-if="issueIdsWithQuestions.has(issue.id)"
-                    class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-background/60 border border-current/20"
-                    title="Có câu hỏi cần xác nhận"
-                  >
-                    ❓
-                  </span>
+                <div class="flex gap-1 shrink-0 items-center">
+                  <span v-if="isResolved(issue.id)" class="text-[10px] text-green-600 font-medium">Fixed</span>
+                  <template v-else>
+                    <Badge :variant="severityBadgeVariant(issue.severity) as any" class="text-[10px]">
+                      {{ issue.severity }}
+                    </Badge>
+                    <span class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-background/60 border border-current/20">
+                      {{ categoryLabel(issue.category) }}
+                    </span>
+                  </template>
                 </div>
               </div>
-              <p class="text-xs leading-relaxed opacity-90">
-                {{ issue.description }}
-              </p>
-              <div class="border-t border-current/20 pt-2 flex items-start justify-between gap-3">
-                <div class="flex-1 min-w-0">
-                  <p class="text-[10px] font-medium opacity-70 mb-0.5">
-                    💡 Gợi ý:
-                  </p>
-                  <p class="text-xs leading-relaxed opacity-80 italic">
-                    {{ issue.suggestion }}
-                  </p>
-                </div>
-                <button
-                  class="shrink-0 flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded border transition-colors bg-background/70 border-current/30 hover:bg-background opacity-80 hover:opacity-100 disabled:opacity-40 disabled:cursor-not-allowed"
-                  :disabled="!!fixingIssueId || refining"
-                  @click="runFixIssue(issue.id)"
-                >
-                  <span
-                    v-if="fixingIssueId === issue.id"
-                    class="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin"
-                  />
-                  <span v-else>✦</span>
-                  {{ fixingIssueId === issue.id ? "Đang fix..." : "Fix" }}
-                </button>
-              </div>
-            </div>
-          </div>
 
-          <!-- Q&A Section -->
-          <div v-if="result.questions.length" class="space-y-3">
-            <div class="flex items-center gap-2">
-              <p
-                class="text-xs font-semibold text-muted-foreground uppercase tracking-wide"
-              >
-                Câu hỏi cần xác nhận
-              </p>
-              <Badge variant="secondary" class="text-[10px]">
-                {{ result.questions.length }} câu hỏi
-              </Badge>
-            </div>
-            <p class="text-xs text-muted-foreground">
-              Trả lời để cung cấp thêm thông tin giải quyết các vấn đề phát hiện.
-            </p>
-
-            <Card
-              v-for="(q, idx) in result.questions"
-              :key="q.id"
-              class="overflow-hidden"
-            >
-              <CardContent class="p-4 space-y-2">
-                <div class="flex items-start justify-between gap-2">
-                  <Label class="text-sm font-medium flex-1">
-                    {{ idx + 1 }}. {{ q.question }}
-                  </Label>
-                  <span
-                    v-if="q.issueId"
-                    class="text-[10px] shrink-0 px-1.5 py-0.5 rounded border border-border bg-muted/50 text-muted-foreground whitespace-nowrap"
-                    :title="`Giải quyết: ${issueTitle(q.issueId)}`"
-                  >
-                    ↳ {{ issueTitle(q.issueId) }}
-                  </span>
-                </div>
-                <p
-                  v-if="q.context"
-                  class="text-xs text-muted-foreground leading-relaxed bg-muted/40 rounded px-2.5 py-1.5"
-                >
-                  {{ q.context }}
-                </p>
-                <!-- Options -->
-                <div v-if="q.options?.length" class="flex flex-wrap gap-1.5">
+              <template v-if="!isResolved(issue.id)">
+                <p class="text-xs leading-relaxed opacity-90">{{ issue.description }}</p>
+                <div class="border-t border-current/20 pt-2 flex items-start justify-between gap-3">
+                  <div class="flex-1 min-w-0">
+                    <p class="text-[10px] font-medium opacity-70 mb-0.5">💡 Gợi ý:</p>
+                    <p class="text-xs leading-relaxed opacity-80 italic">{{ issue.suggestion }}</p>
+                  </div>
                   <button
-                    v-for="opt in q.options"
-                    :key="opt"
-                    class="px-2.5 py-1 text-xs rounded-md border transition-colors"
-                    :class="
-                      answers[q.id] === opt
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-muted/30 border-border text-foreground hover:bg-muted/60'
-                    "
-                    @click="answers[q.id] = opt"
+                    class="shrink-0 flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded border transition-colors bg-background/70 border-current/30 hover:bg-background opacity-80 hover:opacity-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                    :disabled="!!fixingIssueId || refining || !!pendingFix"
+                    @click="runFixIssue(issue.id)"
                   >
-                    {{ opt }}
+                    <span v-if="fixingIssueId === issue.id" class="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                    <span v-else>✦</span>
+                    {{ fixingIssueId === issue.id ? "Đang fix..." : "Fix" }}
                   </button>
                 </div>
-                <!-- Free-text answer -->
-                <Textarea
-                  :model-value="answers[q.id] ?? ''"
-                  @update:model-value="answers[q.id] = String($event)"
-                  :placeholder="q.defaultAnswer || 'Nhập câu trả lời...'"
-                  class="resize-none text-xs leading-relaxed"
-                  rows="2"
-                />
-              </CardContent>
-            </Card>
+              </template>
+            </div>
           </div>
 
           <!-- No issues found -->
-          <div
-            v-if="!result.issues.length && !result.questions.length"
-            class="text-center py-8"
-          >
+          <div v-if="!result.issues.length" class="text-center py-8">
             <span class="text-4xl block mb-3">✅</span>
-            <p class="text-sm font-medium">
-              Spec rõ ràng, không phát hiện vấn đề nào!
-            </p>
+            <p class="text-sm font-medium">Spec rõ ràng, không phát hiện vấn đề nào!</p>
           </div>
 
-          <!-- Refine button -->
+          <!-- Footer actions -->
           <div class="pt-2 border-t border-border space-y-3">
-            <Button
-              class="w-full h-10"
-              variant="default"
-              :disabled="refining || !!fixingIssueId"
-              @click="runRefine"
-            >
-              <span v-if="refining" class="flex items-center gap-2">
-                <span
-                  class="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin"
-                />
-                Đang cập nhật spec...
-              </span>
-              <span v-else>✏️ Fix tất cả vấn đề</span>
-            </Button>
-
-            <p v-if="refineError" class="text-xs text-destructive">
-              {{ refineError }}
-            </p>
-
-            <!-- Refined spec output -->
-            <div v-if="refinedSpec" class="space-y-2">
-              <div class="flex items-center justify-between">
-                <p
-                  class="text-xs font-semibold text-muted-foreground uppercase tracking-wide"
-                >
-                  Spec đã cập nhật
-                </p>
-                <div class="flex gap-1.5">
-                  <!-- Diff / Text toggle -->
-                  <div class="flex rounded border border-border overflow-hidden">
-                    <button
-                      class="px-2 py-1 text-[11px] transition-colors"
-                      :class="showDiff ? 'bg-primary text-primary-foreground' : 'bg-muted/30 text-muted-foreground hover:bg-muted/60'"
-                      @click="showDiff = true"
-                    >
-                      Diff
-                    </button>
-                    <button
-                      class="px-2 py-1 text-[11px] transition-colors"
-                      :class="!showDiff ? 'bg-primary text-primary-foreground' : 'bg-muted/30 text-muted-foreground hover:bg-muted/60'"
-                      @click="showDiff = false"
-                    >
-                      Text
-                    </button>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    class="h-7 text-xs px-2"
-                    @click="copyRefinedSpec"
-                  >
-                    Copy
-                  </Button>
-                  <Button
-                    variant="default"
-                    size="sm"
-                    class="h-7 text-xs px-2"
-                    @click="applyRefinedSpec"
-                  >
-                    Apply
-                  </Button>
-                </div>
-              </div>
-
-              <!-- Diff view -->
-              <SpecDiffView
-                v-if="showDiff"
-                :original="specText"
-                :revised="refinedSpec"
-              />
-
-              <!-- Plain text view -->
-              <Textarea
-                v-else
-                :model-value="refinedSpec"
-                readonly
-                class="text-xs leading-relaxed resize-none bg-muted/30"
-                rows="16"
-              />
+            <!-- Spec ready state -->
+            <div v-if="specReady" class="text-center py-4 space-y-2">
+              <span class="text-3xl block">✅</span>
+              <p class="text-sm font-semibold text-green-600">Spec ready — 0 issues remaining</p>
+              <p class="text-xs text-muted-foreground">Tất cả vấn đề đã được xử lý. Spec sẵn sàng giao dev.</p>
             </div>
+
+            <!-- Fix remaining button -->
+            <template v-else-if="unresolvedIssues.length > 0 && !pendingFix">
+              <Button
+                class="w-full h-10"
+                variant="outline"
+                :disabled="refining || !!fixingIssueId"
+                @click="runRefine"
+              >
+                <span v-if="refining" class="flex items-center gap-2">
+                  <span class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                  Đang fix...
+                </span>
+                <span v-else>✦ Fix {{ unresolvedIssues.length }} vấn đề còn lại</span>
+              </Button>
+              <p class="text-[10px] text-center text-muted-foreground">
+                Hoặc fix từng vấn đề riêng lẻ ở trên
+              </p>
+            </template>
+
+            <p v-if="refineError" class="text-xs text-destructive">{{ refineError }}</p>
           </div>
         </div>
 

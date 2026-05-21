@@ -38,7 +38,7 @@ const clarifyWithSourcePrompt = `You are a senior Business Analyst / BRSE doing 
 Your mission: Find everything that would cause a developer to be confused, blocked, or to implement the wrong thing.
 Think like the developer who will read this spec tomorrow and has to implement it from scratch.
 
-The source code is provided as reference to verify accuracy. Code is ground truth — never suggest code changes.
+You have file reading tools. Before analyzing, explore the codebase: read API routes, data models, validation logic, and relevant handlers to understand actual behavior. Code is ground truth — never suggest code changes.
 
 ## What to check (in order of importance)
 
@@ -85,6 +85,7 @@ Output MUST be valid JSON:
 ## Rules for "suggestion" field
 - PHẢI cụ thể — viết sẵn đoạn text để BA copy-paste vào spec
 - Format: "Thêm vào spec: '[text]'" hoặc "Sửa '[text cũ]' thành '[text mới]'"
+- Nếu tìm thấy behavior thực tế từ code, thêm dòng "📎 Ref: <path/to/file.go> (line X)" vào cuối suggestion
 - KHÔNG viết chung chung như "làm rõ thêm" hay "bổ sung thông tin"
 - KHÔNG bao giờ gợi ý sửa code
 
@@ -226,10 +227,10 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		for _, path := range sourcePaths {
 			scanner := repo.NewScanner(path)
 			info, _ := scanner.Scan()
-			appendRepoContext(&prompt, info)
+			appendRepoContext(&prompt, path, info)
 		}
 		fmt.Fprintf(&prompt, "Spec document:\n%s\n\n", req.Spec)
-		prompt.WriteString("Analyze the spec against the source code. Identify issues and generate Q&A for ambiguous points.")
+		prompt.WriteString("Use your file reading tools to explore the repository paths above, then analyze the spec. Read actual source files to verify behavior before identifying issues.")
 	}
 
 	ctx, cancel := aiContext(r)
@@ -344,11 +345,12 @@ func (h *Handler) Refine(w http.ResponseWriter, r *http.Request) {
 
 // === Helpers ===
 
-func appendRepoContext(b *strings.Builder, info *repo.Info) {
+func appendRepoContext(b *strings.Builder, path string, info *repo.Info) {
 	if info == nil {
+		fmt.Fprintf(b, "Repository path: %s\n\n", path)
 		return
 	}
-	fmt.Fprintf(b, "Repository: %s\nTech stack: %s\n\n", info.Name, strings.Join(info.TechStack, ", "))
+	fmt.Fprintf(b, "Repository: %s\nPath: %s\nTech stack: %s\n\n", info.Name, path, strings.Join(info.TechStack, ", "))
 	if len(info.FileTree) > 0 {
 		b.WriteString("### Project Structure\n")
 		b.WriteString(repo.FormatTree(info.FileTree, 0))
