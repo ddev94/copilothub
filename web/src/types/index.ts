@@ -164,6 +164,7 @@ export interface ClarifyIssue {
 export interface ClarifyResponse {
   summary: string;
   issues: ClarifyIssue[];
+  sessionId?: string;
 }
 
 export interface RefineResponse {

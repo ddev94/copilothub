@@ -43,6 +43,15 @@ func (h *Handler) provider() ai.Provider {
 	return ai.NewProvider(cfg.AI.Provider, cfg.AI.Token, cfg.AI.Model, cfg.AI.BaseURL, h.dataDir)
 }
 
+// providerWithModel creates an AI provider, overriding the model if non-empty.
+func (h *Handler) providerWithModel(model string) ai.Provider {
+	cfg, _ := h.cfgStore.Load()
+	if model == "" {
+		model = cfg.AI.Model
+	}
+	return ai.NewProvider(cfg.AI.Provider, cfg.AI.Token, model, cfg.AI.BaseURL, h.dataDir)
+}
+
 // === Clarify Spec ===
 
 const clarifyWithSourcePrompt = `You are a senior Business Analyst / BRSE doing a final review of a spec before it is handed to developers.
@@ -217,6 +226,7 @@ type clarifyReq struct {
 	ProjectPath string   `json:"projectPath"`
 	ProjectID   string   `json:"projectId"`
 	RepoIDs     []string `json:"repoIds"` // empty = all repos
+	Model       string   `json:"model,omitempty"`
 }
 
 type fileRef struct {
@@ -236,8 +246,9 @@ type clarifyIssue struct {
 }
 
 type clarifyResponse struct {
-	Summary string         `json:"summary"`
-	Issues  []clarifyIssue `json:"issues"`
+	Summary   string         `json:"summary"`
+	Issues    []clarifyIssue `json:"issues"`
+	SessionID string         `json:"sessionId,omitempty"`
 }
 
 func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
@@ -321,10 +332,28 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ep, hasEvents := h.provider().(ai.EventingProvider)
-	if hasEvents {
-		if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
-			h.clarifySSE(w, ctx, messages, sourceTools, repoDirs, ep)
+	p := h.providerWithModel(req.Model)
+	isSSE := strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+
+	if csp, ok := p.(ai.ChatSessionProvider); ok {
+		if isSSE {
+			h.clarifySSE(w, ctx, messages, sourceTools, repoDirs, csp)
+		} else {
+			result, sessionID, err := csp.CompleteWithSession(ctx, messages, sourceTools, nil)
+			if err != nil {
+				writeError(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			resp := parseClarifyResult(result, repoDirs)
+			resp.SessionID = sessionID
+			writeJSON(w, resp)
+		}
+		return
+	}
+
+	if ep, ok := p.(ai.EventingProvider); ok {
+		if isSSE {
+			h.clarifySSELegacy(w, ctx, messages, sourceTools, repoDirs, ep)
 		} else {
 			result, err := ep.CompleteWithEvents(ctx, messages, sourceTools, nil)
 			if err != nil {
@@ -336,7 +365,7 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.provider().Complete(ctx, messages)
+	result, err := p.Complete(ctx, messages)
 	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -344,19 +373,38 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, parseClarifyResult(result, repoDirs))
 }
 
-func (h *Handler) clarifySSE(w http.ResponseWriter, ctx context.Context, messages []ai.Message, sourceTools []ai.Tool, repoDirs map[string]project.Repository, ep ai.EventingProvider) {
+func sseWriter(w http.ResponseWriter) (send func(string, any), canFlush bool) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
-	flusher, canFlush := w.(http.Flusher)
-
-	sendEvent := func(event string, data any) {
+	flusher, ok := w.(http.Flusher)
+	send = func(event string, data any) {
 		b, _ := json.Marshal(data)
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-		if canFlush {
+		if ok {
 			flusher.Flush()
 		}
 	}
+	return send, ok
+}
+
+func (h *Handler) clarifySSE(w http.ResponseWriter, ctx context.Context, messages []ai.Message, sourceTools []ai.Tool, repoDirs map[string]project.Repository, csp ai.ChatSessionProvider) {
+	sendEvent, _ := sseWriter(w)
+
+	result, sessionID, err := csp.CompleteWithSession(ctx, messages, sourceTools, func(ev ai.ToolEvent) {
+		sendEvent("tool", ev)
+	})
+	if err != nil {
+		sendEvent("error", map[string]string{"error": err.Error()})
+		return
+	}
+	resp := parseClarifyResult(result, repoDirs)
+	resp.SessionID = sessionID
+	sendEvent("result", resp)
+}
+
+func (h *Handler) clarifySSELegacy(w http.ResponseWriter, ctx context.Context, messages []ai.Message, sourceTools []ai.Tool, repoDirs map[string]project.Repository, ep ai.EventingProvider) {
+	sendEvent, _ := sseWriter(w)
 
 	result, err := ep.CompleteWithEvents(ctx, messages, sourceTools, func(ev ai.ToolEvent) {
 		sendEvent("tool", ev)
@@ -495,6 +543,7 @@ type refineReq struct {
 	Spec    string            `json:"spec"`
 	Issues  []clarifyIssue    `json:"issues"`
 	Answers map[string]string `json:"answers"`
+	Model   string            `json:"model,omitempty"`
 }
 
 type refineResponse struct {
@@ -537,7 +586,7 @@ func (h *Handler) Refine(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := aiContext(r)
 	defer cancel()
 
-	result, err := h.provider().Complete(ctx, []ai.Message{
+	result, err := h.providerWithModel(req.Model).Complete(ctx, []ai.Message{
 		{Role: "system", Content: refineSystemPrompt},
 		{Role: "user", Content: prompt.String()},
 	})
@@ -595,4 +644,61 @@ func writeError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg}) //nolint:errcheck
+}
+
+// === Chat (persistent session) ===
+
+type chatReq struct {
+	SessionID string   `json:"sessionId"`
+	Message   string   `json:"message"`
+	ProjectID string   `json:"projectId,omitempty"`
+	RepoIDs   []string `json:"repoIds,omitempty"`
+	Model     string   `json:"model,omitempty"`
+}
+
+func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
+	var req chatReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.SessionID == "" || strings.TrimSpace(req.Message) == "" {
+		writeError(w, "sessionId and message are required", http.StatusBadRequest)
+		return
+	}
+
+	p := h.providerWithModel(req.Model)
+	csp, ok := p.(ai.ChatSessionProvider)
+	if !ok {
+		writeError(w, "current AI provider does not support persistent sessions", http.StatusNotImplemented)
+		return
+	}
+
+	var sourceTools []ai.Tool
+	if req.ProjectID != "" && h.projectStore != nil {
+		repoDirs := h.projectStore.ReposWithSourceDirs(req.ProjectID, req.RepoIDs)
+		var paths []string
+		for dir := range repoDirs {
+			if dir != "" {
+				paths = append(paths, dir)
+			}
+		}
+		if len(paths) > 0 {
+			sourceTools = tools.SourceScanTools(paths)
+		}
+	}
+
+	ctx, cancel := aiContext(r)
+	defer cancel()
+
+	sendEvent, _ := sseWriter(w)
+
+	result, err := csp.ChatWithSession(ctx, req.SessionID, req.Message, sourceTools, func(ev ai.ToolEvent) {
+		sendEvent("tool", ev)
+	})
+	if err != nil {
+		sendEvent("error", map[string]string{"error": err.Error()})
+		return
+	}
+	sendEvent("message", map[string]string{"content": result})
 }

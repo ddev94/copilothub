@@ -51,6 +51,7 @@ func setupRoutes(mux *http.ServeMux, dataDir string) {
 	mux.HandleFunc("GET /api/hub/features", hubH.ListFeatures)
 	mux.HandleFunc("GET /api/config", cfgH.Get)
 	mux.HandleFunc("PUT /api/config", cfgH.Save)
+	mux.HandleFunc("GET /api/models", cfgH.Models)
 
 	// Project routes
 	mux.HandleFunc("GET /api/projects", projH.List)

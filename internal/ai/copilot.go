@@ -211,3 +211,150 @@ func (p *SDKProvider) CompleteWithEvents(ctx context.Context, messages []Message
 		return "", fmt.Errorf("copilot timeout: %w", ctx.Err())
 	}
 }
+
+// CompleteWithSession is like CompleteWithEvents but keeps the session state on disk
+// after returning, allowing resumption via ChatWithSession.
+func (p *SDKProvider) CompleteWithSession(ctx context.Context, messages []Message, tools []Tool, onEvent func(ToolEvent)) (result, sessionID string, err error) {
+	p.once.Do(p.start)
+	if p.startErr != nil {
+		return "", "", fmt.Errorf("copilot start: %w", p.startErr)
+	}
+
+	var sys, user strings.Builder
+	for _, m := range messages {
+		switch m.Role {
+		case "system":
+			sys.WriteString(m.Content)
+		case "user":
+			user.WriteString(m.Content)
+		}
+	}
+
+	cfg := &copilot.SessionConfig{
+		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
+		Tools:               convertTools(tools, onEvent),
+	}
+	if p.model != "" {
+		cfg.Model = p.model
+	}
+	if sys.Len() > 0 {
+		cfg.SystemMessage = &copilot.SystemMessageConfig{
+			Mode:    "replace",
+			Content: sys.String(),
+		}
+	}
+
+	session, err := p.client.CreateSession(ctx, cfg)
+	if err != nil {
+		return "", "", fmt.Errorf("create session: %w", err)
+	}
+
+	doneCh := make(chan error, 1)
+	var content strings.Builder
+	var mu sync.Mutex
+	unsubscribe := session.On(func(event copilot.SessionEvent) {
+		switch d := event.Data.(type) {
+		case *copilot.AssistantMessageData:
+			mu.Lock()
+			content.WriteString(d.Content)
+			mu.Unlock()
+		case *copilot.SessionIdleData:
+			select {
+			case doneCh <- nil:
+			default:
+			}
+		case *copilot.SessionErrorData:
+			select {
+			case doneCh <- fmt.Errorf("session error: %s", d.Message):
+			default:
+			}
+		}
+	})
+	defer unsubscribe()
+
+	if _, err := session.Send(ctx, copilot.MessageOptions{Prompt: user.String()}); err != nil {
+		session.Disconnect()
+		return "", "", fmt.Errorf("copilot send: %w", err)
+	}
+
+	select {
+	case sendErr := <-doneCh:
+		mu.Lock()
+		text := content.String()
+		mu.Unlock()
+		sid := session.SessionID
+		session.Disconnect()
+		if sendErr != nil {
+			return "", "", sendErr
+		}
+		return text, sid, nil
+	case <-ctx.Done():
+		session.Disconnect()
+		return "", "", fmt.Errorf("copilot timeout: %w", ctx.Err())
+	}
+}
+
+// ChatWithSession resumes an existing session by ID and sends a new message.
+// The session is disconnected after the response but state is preserved for future turns.
+func (p *SDKProvider) ChatWithSession(ctx context.Context, sessionID, message string, tools []Tool, onEvent func(ToolEvent)) (string, error) {
+	p.once.Do(p.start)
+	if p.startErr != nil {
+		return "", fmt.Errorf("copilot start: %w", p.startErr)
+	}
+
+	cfg := &copilot.ResumeSessionConfig{
+		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
+		Tools:               convertTools(tools, onEvent),
+	}
+	if p.model != "" {
+		cfg.Model = p.model
+	}
+
+	session, err := p.client.ResumeSession(ctx, sessionID, cfg)
+	if err != nil {
+		return "", fmt.Errorf("resume session: %w", err)
+	}
+
+	doneCh := make(chan error, 1)
+	var content strings.Builder
+	var mu sync.Mutex
+	unsubscribe := session.On(func(event copilot.SessionEvent) {
+		switch d := event.Data.(type) {
+		case *copilot.AssistantMessageData:
+			mu.Lock()
+			content.WriteString(d.Content)
+			mu.Unlock()
+		case *copilot.SessionIdleData:
+			select {
+			case doneCh <- nil:
+			default:
+			}
+		case *copilot.SessionErrorData:
+			select {
+			case doneCh <- fmt.Errorf("session error: %s", d.Message):
+			default:
+			}
+		}
+	})
+	defer unsubscribe()
+
+	if _, err := session.Send(ctx, copilot.MessageOptions{Prompt: message}); err != nil {
+		session.Disconnect()
+		return "", fmt.Errorf("copilot send: %w", err)
+	}
+
+	select {
+	case sendErr := <-doneCh:
+		mu.Lock()
+		text := content.String()
+		mu.Unlock()
+		session.Disconnect()
+		if sendErr != nil {
+			return "", sendErr
+		}
+		return text, nil
+	case <-ctx.Done():
+		session.Disconnect()
+		return "", fmt.Errorf("copilot timeout: %w", ctx.Err())
+	}
+}

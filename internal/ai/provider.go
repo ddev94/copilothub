@@ -34,6 +34,15 @@ type EventingProvider interface {
 	CompleteWithEvents(ctx context.Context, messages []Message, tools []Tool, onEvent func(ToolEvent)) (string, error)
 }
 
+// ChatSessionProvider extends Provider with persistent multi-turn session support.
+// After CompleteWithSession the session is disconnected but state is preserved on disk,
+// allowing ChatWithSession to resume the same conversation later.
+// Only SDKProvider implements this.
+type ChatSessionProvider interface {
+	CompleteWithSession(ctx context.Context, messages []Message, tools []Tool, onEvent func(ToolEvent)) (result, sessionID string, err error)
+	ChatWithSession(ctx context.Context, sessionID, message string, tools []Tool, onEvent func(ToolEvent)) (string, error)
+}
+
 // NewProvider creates a Provider based on the provider name.
 // Defaults to GitHub Copilot SDK when provider is "" or "copilot".
 func NewProvider(provider, token, model, baseURL, cwd string) Provider {

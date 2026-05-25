@@ -135,11 +135,55 @@ export const api = {
     }
     throw new Error("Stream ended without result");
   },
-  refineSpec: (payload: { spec: string; issues: ClarifyResponse["issues"] }) =>
+  refineSpec: (payload: { spec: string; issues: ClarifyResponse["issues"]; model?: string }) =>
     request<RefineResponse>(`${SPEC_CLARIFY}/refine`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  clarifyChat: async (
+    payload: { sessionId: string; message: string; projectId?: string; repoIds?: string[]; model?: string },
+    onTool: (event: ToolEvent) => void,
+  ): Promise<string> => {
+    const res = await fetch(`${BASE}${SPEC_CLARIFY}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      let boundary: number;
+      while ((boundary = buf.indexOf("\n\n")) !== -1) {
+        const block = buf.slice(0, boundary);
+        buf = buf.slice(boundary + 2);
+
+        let eventType = "message";
+        let dataLine = "";
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event:")) eventType = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLine = line.slice(5).trim();
+        }
+        if (!dataLine) continue;
+
+        if (eventType === "tool") {
+          onTool(JSON.parse(dataLine) as ToolEvent);
+        } else if (eventType === "message") {
+          return (JSON.parse(dataLine) as { content: string }).content;
+        } else if (eventType === "error") {
+          throw new Error((JSON.parse(dataLine) as { error: string }).error);
+        }
+      }
+    }
+    throw new Error("Stream ended without response");
+  },
   config: {
     get: () => request<Config>("/config"),
     save: (cfg: Config) =>
@@ -147,6 +191,9 @@ export const api = {
         method: "PUT",
         body: JSON.stringify(cfg),
       }),
+  },
+  models: {
+    list: () => request<{ models: string[]; current: string }>("/models"),
   },
   auth: {
     status: () => request<AuthStatus>("/auth/status"),
