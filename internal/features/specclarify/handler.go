@@ -6,7 +6,6 @@ import (
 	"copilothub/internal/ai/tools"
 	"copilothub/internal/config"
 	"copilothub/internal/project"
-	"copilothub/internal/repo"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -264,7 +263,6 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 
 	var systemPrompt string
 	var prompt strings.Builder
-	var sourcePaths []string
 
 	switch req.Mode {
 	case "wiki":
@@ -282,34 +280,14 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		systemPrompt = clarifyWithBothPrompt
-		if req.ProjectPath != "" {
-			sourcePaths = []string{req.ProjectPath}
-		} else if req.ProjectID != "" && h.projectStore != nil {
-			sourcePaths = h.projectStore.SourceDirsForRepos(req.ProjectID, req.RepoIDs)
-		}
-		for _, path := range sourcePaths {
-			scanner := repo.NewScanner(path)
-			info, _ := scanner.Scan()
-			appendRepoContext(&prompt, path, info)
-		}
-		prompt.WriteString("STEP 1 — Bắt buộc: dùng file reading tools để khám phá repository ở trên. Đọc các route, model, handler, validation liên quan đến spec trước khi phân tích.\n\n")
+		prompt.WriteString("STEP 1 — Bắt buộc: dùng file reading tools để khám phá codebase. Đọc các route, model, handler, validation liên quan đến spec trước khi phân tích.\n\n")
 		fmt.Fprintf(&prompt, "STEP 2 — Spec document:\n%s\n\n", req.Spec)
 		fmt.Fprintf(&prompt, "STEP 3 — Wiki/Documentation (business rules reference):\n%s\n\n", req.WikiContent)
 		prompt.WriteString("Bây giờ cross-reference spec với cả source code bạn vừa đọc VÀ wiki ở trên. Xác định tất cả vấn đề.")
 	default: // "source"
 		systemPrompt = clarifyWithSourcePrompt
-		if req.ProjectPath != "" {
-			sourcePaths = []string{req.ProjectPath}
-		} else if req.ProjectID != "" && h.projectStore != nil {
-			sourcePaths = h.projectStore.SourceDirsForRepos(req.ProjectID, req.RepoIDs)
-		}
-		for _, path := range sourcePaths {
-			scanner := repo.NewScanner(path)
-			info, _ := scanner.Scan()
-			appendRepoContext(&prompt, path, info)
-		}
 		fmt.Fprintf(&prompt, "Spec document:\n%s\n\n", req.Spec)
-		prompt.WriteString("Use your file reading tools to explore the repository paths above, then analyze the spec. Read actual source files to verify behavior before identifying issues.")
+		prompt.WriteString("Use your file reading tools to explore the codebase, then analyze the spec. Read actual source files to verify behavior before identifying issues.")
 	}
 
 	messages := []ai.Message{
@@ -320,16 +298,10 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := aiContext(r)
 	defer cancel()
 
-	// Build source scanning tools and repo dir→metadata map for file URL resolution.
-	var sourceTools []ai.Tool
+	// Build repo dir→metadata map for file URL resolution.
 	var repoDirs map[string]project.Repository
-	if req.Mode == "source" || req.Mode == "both" {
-		if len(sourcePaths) > 0 {
-			sourceTools = tools.SourceScanTools(sourcePaths)
-		}
-		if req.ProjectID != "" && h.projectStore != nil {
-			repoDirs = h.projectStore.ReposWithSourceDirs(req.ProjectID, req.RepoIDs)
-		}
+	if (req.Mode == "source" || req.Mode == "both") && req.ProjectID != "" && h.projectStore != nil {
+		repoDirs = h.projectStore.ReposWithSourceDirs(req.ProjectID, req.RepoIDs)
 	}
 
 	p := h.providerWithModel(req.Model)
@@ -337,9 +309,9 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 
 	if csp, ok := p.(ai.ChatSessionProvider); ok {
 		if isSSE {
-			h.clarifySSE(w, ctx, messages, sourceTools, repoDirs, csp)
+			h.clarifySSE(w, ctx, messages, nil, repoDirs, csp)
 		} else {
-			result, sessionID, err := csp.CompleteWithSession(ctx, messages, sourceTools, nil)
+			result, sessionID, err := csp.CompleteWithSession(ctx, messages, nil, nil)
 			if err != nil {
 				writeError(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -353,9 +325,9 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 
 	if ep, ok := p.(ai.EventingProvider); ok {
 		if isSSE {
-			h.clarifySSELegacy(w, ctx, messages, sourceTools, repoDirs, ep)
+			h.clarifySSELegacy(w, ctx, messages, nil, repoDirs, ep)
 		} else {
-			result, err := ep.CompleteWithEvents(ctx, messages, sourceTools, nil)
+			result, err := ep.CompleteWithEvents(ctx, messages, nil, nil)
 			if err != nil {
 				writeError(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -610,19 +582,6 @@ func uniqueStrings(ss []string) []string {
 		}
 	}
 	return out
-}
-
-func appendRepoContext(b *strings.Builder, path string, info *repo.Info) {
-	if info == nil {
-		fmt.Fprintf(b, "Repository path: %s\n\n", path)
-		return
-	}
-	fmt.Fprintf(b, "Repository: %s\nPath: %s\nTech stack: %s\n\n", info.Name, path, strings.Join(info.TechStack, ", "))
-	if len(info.FileTree) > 0 {
-		b.WriteString("### Project Structure\n")
-		b.WriteString(repo.FormatTree(info.FileTree, 0))
-		b.WriteString("\n")
-	}
 }
 
 func cleanJSON(s string) string {

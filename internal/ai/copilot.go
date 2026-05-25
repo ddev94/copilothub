@@ -58,15 +58,11 @@ func NewSDKProvider(token, model, cwd string) *SDKProvider {
 
 func (p *SDKProvider) start() {
 	opts := &copilot.ClientOptions{LogLevel: "error"}
-	if cli := FindCLI(); cli != "" {
-		opts.CLIPath = cli
-	}
+
 	if p.token != "" {
 		opts.GitHubToken = p.token
 	}
-	if p.cwd != "" {
-		opts.Cwd = p.cwd
-	}
+
 	// UseLoggedInUser defaults to true → uses gh CLI auth automatically
 	p.client = copilot.NewClient(opts)
 	p.startErr = p.client.Start(context.Background())
@@ -215,6 +211,7 @@ func (p *SDKProvider) CompleteWithEvents(ctx context.Context, messages []Message
 // CompleteWithSession is like CompleteWithEvents but keeps the session state on disk
 // after returning, allowing resumption via ChatWithSession.
 func (p *SDKProvider) CompleteWithSession(ctx context.Context, messages []Message, tools []Tool, onEvent func(ToolEvent)) (result, sessionID string, err error) {
+	fmt.Println(messages)
 	p.once.Do(p.start)
 	if p.startErr != nil {
 		return "", "", fmt.Errorf("copilot start: %w", p.startErr)
