@@ -26,6 +26,12 @@ const features = [
     icon: "📚",
     description: "Chat and manage project knowledge across local projects",
   },
+  {
+    id: "repositories",
+    name: "Repositories",
+    icon: "🗂️",
+    description: "Connect and manage GitHub repositories for this project",
+  },
 ];
 
 onMounted(async () => {
@@ -91,7 +97,7 @@ function openFeature(featureId: string) {
           class="text-xs px-3 py-1.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
           @click="router.push(`/projects/${projectId}/settings`)"
         >
-          ⚙ Settings
+          ⚙ Project Settings
         </button>
       </div>
     </header>

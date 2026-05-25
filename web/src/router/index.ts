@@ -25,5 +25,9 @@ export const router = createRouter({
       path: "/projects/:projectId/features/wiki/chat",
       component: () => import("@/features/wiki/WikiChatPage.vue"),
     },
+    {
+      path: "/projects/:projectId/features/repositories",
+      component: () => import("@/features/repositories/RepositoryPage.vue"),
+    },
   ],
 });

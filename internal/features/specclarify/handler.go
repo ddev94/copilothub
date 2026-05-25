@@ -3,6 +3,7 @@ package specclarify
 import (
 	"context"
 	"copilothub/internal/ai"
+	"copilothub/internal/ai/tools"
 	"copilothub/internal/project"
 	"copilothub/internal/repo"
 	"encoding/json"
@@ -14,7 +15,7 @@ import (
 
 const aiTimeout = 5 * time.Minute
 
-func aiContext(r *http.Request) (context.Context, context.CancelFunc) {
+func aiContext(_ *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), aiTimeout)
 }
 
@@ -62,16 +63,6 @@ Output MUST be valid JSON:
       "description": "Mô tả cụ thể: spec đang viết gì (hoặc không viết gì), tại sao dev sẽ bị block/stuck ở đây",
       "suggestion": "Viết sẵn text cần thêm hoặc sửa vào spec. Ví dụ: 'Thêm vào spec: [text cụ thể]' hoặc 'Sửa \"[text cũ]\" thành \"[text mới]\"'"
     }
-  ],
-  "questions": [
-    {
-      "id": "q1",
-      "issueId": "i1",
-      "question": "Câu hỏi cần BA/BRSE xác nhận để điền vào chỗ còn thiếu trong spec",
-      "context": "Trích dẫn phần spec liên quan hoặc behavior thực tế từ code",
-      "options": ["Option A", "Option B"],
-      "defaultAnswer": "Gợi ý dựa trên pattern của codebase"
-    }
   ]
 }
 
@@ -89,11 +80,57 @@ Output MUST be valid JSON:
 - KHÔNG viết chung chung như "làm rõ thêm" hay "bổ sung thông tin"
 - KHÔNG bao giờ gợi ý sửa code
 
-## Rules for questions
-- Chỉ tạo question khi BA/BRSE là người duy nhất có thể trả lời (quyết định nghiệp vụ)
-- Mỗi question PHẢI có issueId
-- Tối đa 5 questions, ưu tiên high severity
-- Không hỏi những gì đã rõ từ code
+Output ONLY valid JSON. Language is Vietnamese.`
+
+const clarifyWithBothPrompt = `You are a senior Business Analyst / BRSE doing a final review of a spec before it is handed to developers.
+
+Your mission: Find everything that would cause a developer to be confused, blocked, or to implement the wrong thing.
+Think like the developer who will read this spec tomorrow and has to implement it from scratch.
+
+You have BOTH source code access AND wiki/documentation. Use them together:
+- You have file reading tools — explore the codebase to verify actual behavior. Code is ground truth for what the system currently does.
+- Wiki/documentation is provided as reference for business rules and domain knowledge. Wiki is ground truth for business intent — never suggest wiki changes.
+
+## What to check (in order of importance)
+
+1. MISSING FLOWS: Are all required user flows described? Happy path + alternative paths + error paths?
+2. MISSING EDGE CASES: What happens when input is empty/invalid? When a resource doesn't exist? When permissions are denied? When an external service fails?
+3. MISSING CONSTRAINTS: What are the validation rules? Character limits? Allowed values? Business rules from wiki not reflected in spec?
+4. AMBIGUITY: Any requirement a developer could interpret in 2+ different ways?
+5. INACCURACY: Does the spec contradict what the code actually does OR misrepresent what the wiki documents?
+
+## Output format
+
+Output MUST be valid JSON:
+{
+  "summary": "1-2 câu: spec này có sẵn sàng giao dev chưa? Điểm yếu chính là gì?",
+  "issues": [
+    {
+      "id": "i1",
+      "category": "missing_flow|missing_edge_case|missing_constraint|ambiguity|inaccuracy",
+      "severity": "high|medium|low",
+      "title": "Tên ngắn của vấn đề",
+      "description": "Mô tả cụ thể: spec đang viết gì (hoặc không viết gì), tại sao dev sẽ bị block/stuck ở đây",
+      "suggestion": "Viết sẵn text cần thêm hoặc sửa vào spec. Ví dụ: 'Thêm vào spec: [text cụ thể]' hoặc 'Sửa \"[text cũ]\" thành \"[text mới]\"'"
+    }
+  ],
+  "wiki_sections": ["Tên section/heading trong wiki mà bạn đã dùng làm căn cứ"]
+}
+
+## Category meanings
+- missing_flow: Một luồng người dùng hoàn toàn vắng mặt trong spec
+- missing_edge_case: Trường hợp đặc biệt chưa được mô tả
+- missing_constraint: Rule validation, giới hạn, hoặc điều kiện nghiệp vụ chưa được specify
+- ambiguity: Yêu cầu quá mơ hồ — một dev có thể hiểu thành 2+ cách khác nhau
+- inaccuracy: Spec mô tả sai so với code thực tế hoặc mâu thuẫn với wiki
+
+## Rules for "suggestion" field
+- PHẢI cụ thể — viết sẵn đoạn text để BA copy-paste vào spec
+- Format: "Thêm vào spec: '[text]'" hoặc "Sửa '[text cũ]' thành '[text mới]'"
+- Nếu tìm thấy behavior từ code, thêm "📎 Ref: <path/to/file.go> (line X)" vào cuối suggestion
+- Nếu lấy từ wiki, thêm "📖 Wiki: [tên section]" vào cuối suggestion
+- KHÔNG viết chung chung như "làm rõ thêm" hay "bổ sung thông tin"
+- KHÔNG bao giờ gợi ý sửa code hoặc wiki
 
 Output ONLY valid JSON. Language is Vietnamese.`
 
@@ -127,16 +164,7 @@ Output MUST be valid JSON:
       "suggestion": "Viết sẵn text cần thêm hoặc sửa vào spec. Ví dụ: 'Thêm vào spec: [text cụ thể]' hoặc 'Sửa \"[text cũ]\" thành \"[text mới]\"'"
     }
   ],
-  "questions": [
-    {
-      "id": "q1",
-      "issueId": "i1",
-      "question": "Câu hỏi cần BA/BRSE xác nhận để điền vào chỗ còn thiếu trong spec",
-      "context": "Trích dẫn phần spec liên quan hoặc nội dung wiki liên quan",
-      "options": ["Option A", "Option B"],
-      "defaultAnswer": "Gợi ý dựa trên wiki"
-    }
-  ]
+  "wiki_sections": ["Tên section/heading trong wiki mà bạn đã dùng làm căn cứ"]
 }
 
 ## Category meanings
@@ -151,11 +179,6 @@ Output MUST be valid JSON:
 - Format: "Thêm vào spec: '[text]'" hoặc "Sửa '[text cũ]' thành '[text mới]'"
 - KHÔNG viết chung chung như "làm rõ thêm" hay "bổ sung thông tin"
 - KHÔNG bao giờ gợi ý sửa wiki
-
-## Rules for questions
-- Chỉ tạo question khi BA/BRSE là người duy nhất có thể trả lời (quyết định nghiệp vụ)
-- Mỗi question PHẢI có issueId
-- Tối đa 5 questions, ưu tiên high severity
 
 Output ONLY valid JSON. Language is Vietnamese.`
 
@@ -177,19 +200,11 @@ type clarifyIssue struct {
 	Suggestion  string `json:"suggestion"`
 }
 
-type clarifyQuestion struct {
-	ID            string   `json:"id"`
-	IssueID       string   `json:"issueId,omitempty"`
-	Question      string   `json:"question"`
-	Context       string   `json:"context"`
-	Options       []string `json:"options"`
-	DefaultAnswer string   `json:"defaultAnswer"`
-}
-
 type clarifyResponse struct {
-	Issues    []clarifyIssue    `json:"issues"`
-	Questions []clarifyQuestion `json:"questions"`
-	Summary   string            `json:"summary"`
+	Summary         string         `json:"summary"`
+	Issues          []clarifyIssue `json:"issues"`
+	ReferencedFiles []string       `json:"referenced_files,omitempty"`
+	WikiSections    []string       `json:"wiki_sections,omitempty"`
 }
 
 func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
@@ -205,6 +220,7 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 
 	var systemPrompt string
 	var prompt strings.Builder
+	var sourcePaths []string
 
 	switch req.Mode {
 	case "wiki":
@@ -216,9 +232,27 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&prompt, "Spec document:\n%s\n\n", req.Spec)
 		fmt.Fprintf(&prompt, "Wiki/Documentation:\n%s\n\n", req.WikiContent)
 		prompt.WriteString("Analyze the spec against the wiki content. Identify issues and generate Q&A for ambiguous points.")
+	case "both":
+		if strings.TrimSpace(req.WikiContent) == "" {
+			writeError(w, "wikiContent is required for both mode", http.StatusBadRequest)
+			return
+		}
+		systemPrompt = clarifyWithBothPrompt
+		if req.ProjectPath != "" {
+			sourcePaths = []string{req.ProjectPath}
+		} else if req.ProjectID != "" && h.projectStore != nil {
+			sourcePaths = h.projectStore.SourceDirsForRepos(req.ProjectID, req.RepoIDs)
+		}
+		for _, path := range sourcePaths {
+			scanner := repo.NewScanner(path)
+			info, _ := scanner.Scan()
+			appendRepoContext(&prompt, path, info)
+		}
+		fmt.Fprintf(&prompt, "Wiki/Documentation (business rules reference):\n%s\n\n", req.WikiContent)
+		fmt.Fprintf(&prompt, "Spec document:\n%s\n\n", req.Spec)
+		prompt.WriteString("Use your file reading tools to explore the repository paths above. Cross-reference the spec against both the source code and the wiki content provided. Read actual source files to verify behavior before identifying issues.")
 	default: // "source"
 		systemPrompt = clarifyWithSourcePrompt
-		var sourcePaths []string
 		if req.ProjectPath != "" {
 			sourcePaths = []string{req.ProjectPath}
 		} else if req.ProjectID != "" && h.projectStore != nil {
@@ -233,31 +267,92 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		prompt.WriteString("Use your file reading tools to explore the repository paths above, then analyze the spec. Read actual source files to verify behavior before identifying issues.")
 	}
 
+	messages := []ai.Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: prompt.String()},
+	}
+
 	ctx, cancel := aiContext(r)
 	defer cancel()
 
-	result, err := h.provider.Complete(ctx, []ai.Message{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: prompt.String()},
-	})
+	// Build source scanning tools for modes that access the codebase.
+	var sourceTools []ai.Tool
+	if req.Mode == "source" || req.Mode == "both" {
+		if len(sourcePaths) > 0 {
+			sourceTools = tools.SourceScanTools(sourcePaths)
+		}
+	}
+
+	ep, hasEvents := h.provider.(ai.EventingProvider)
+	if hasEvents {
+		if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			h.clarifySSE(w, ctx, messages, sourceTools, ep)
+		} else {
+			var readFiles []string
+			result, err := ep.CompleteWithEvents(ctx, messages, sourceTools, func(ev ai.ToolEvent) {
+				if ev.Kind == "read" && ev.Path != "" {
+					readFiles = append(readFiles, ev.Path)
+				}
+			})
+			if err != nil {
+				writeError(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			resp := parseClarifyResult(result)
+			resp.ReferencedFiles = uniqueStrings(readFiles)
+			writeJSON(w, resp)
+		}
+		return
+	}
+
+	result, err := h.provider.Complete(ctx, messages)
 	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	writeJSON(w, parseClarifyResult(result))
+}
 
-	cleaned := cleanJSON(result)
-	var resp clarifyResponse
-	if err := json.Unmarshal([]byte(cleaned), &resp); err != nil {
-		writeError(w, fmt.Sprintf("failed to parse AI response: %v", err), http.StatusInternalServerError)
+func (h *Handler) clarifySSE(w http.ResponseWriter, ctx context.Context, messages []ai.Message, sourceTools []ai.Tool, ep ai.EventingProvider) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher, canFlush := w.(http.Flusher)
+
+	sendEvent := func(event string, data any) {
+		b, _ := json.Marshal(data)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
+		if canFlush {
+			flusher.Flush()
+		}
+	}
+
+	var readFiles []string
+	result, err := ep.CompleteWithEvents(ctx, messages, sourceTools, func(ev ai.ToolEvent) {
+		sendEvent("tool", ev)
+		if ev.Kind == "read" && ev.Path != "" {
+			readFiles = append(readFiles, ev.Path)
+		}
+	})
+	if err != nil {
+		sendEvent("error", map[string]string{"error": err.Error()})
 		return
+	}
+	resp := parseClarifyResult(result)
+	resp.ReferencedFiles = uniqueStrings(readFiles)
+	sendEvent("result", resp)
+}
+
+func parseClarifyResult(raw string) clarifyResponse {
+	var resp clarifyResponse
+	if err := json.Unmarshal([]byte(cleanJSON(raw)), &resp); err != nil {
+		// Return empty response rather than crashing; caller can surface the error via SSE error event
+		resp = clarifyResponse{}
 	}
 	if resp.Issues == nil {
 		resp.Issues = []clarifyIssue{}
 	}
-	if resp.Questions == nil {
-		resp.Questions = []clarifyQuestion{}
-	}
-	writeJSON(w, resp)
+	return resp
 }
 
 // === Refine Spec ===
@@ -280,10 +375,13 @@ Your job:
 - For ambiguity: rewrite the vague requirement with precise, unambiguous language
 - For inaccuracy: correct the spec to match actual behavior
 - Incorporate BA/BRSE answers to fill in business logic decisions
-- Preserve the original spec's structure and format
 - Write in the same language as the original spec
 
-Output ONLY the rewritten spec text. Do NOT include explanations, JSON, or markdown code blocks.`
+## Output format
+- Output the rewritten spec in **Markdown format**
+- Use "##" / "###" for sections, "-" for bullet lists, **bold** for key terms/constraints
+- Do NOT wrap the output in a code block
+- Output ONLY the rewritten spec. No explanations, no preamble.`
 
 type refineReq struct {
 	Spec    string            `json:"spec"`
@@ -344,6 +442,18 @@ func (h *Handler) Refine(w http.ResponseWriter, r *http.Request) {
 }
 
 // === Helpers ===
+
+func uniqueStrings(ss []string) []string {
+	seen := make(map[string]bool, len(ss))
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 func appendRepoContext(b *strings.Builder, path string, info *repo.Info) {
 	if info == nil {

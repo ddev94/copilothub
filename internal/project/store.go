@@ -117,6 +117,23 @@ func migrateProject(p *Project) {
 	}
 }
 
+// backfillBranches detects and fills missing RepoBranch for already-cloned repos.
+// Returns true if any field was updated.
+func (s *Store) backfillBranches(p *Project) bool {
+	updated := false
+	for i := range p.Repositories {
+		r := &p.Repositories[i]
+		if r.RepoBranch == "" && r.RepoCloned {
+			repoDir := s.RepoSourceDir(p.ID, r.ID)
+			if branch := detectBranch(repoDir, ""); branch != "" {
+				r.RepoBranch = branch
+				updated = true
+			}
+		}
+	}
+	return updated
+}
+
 // List returns all registered projects, migrating legacy single-repo data if present.
 func (s *Store) List() ([]Project, error) {
 	data, err := os.ReadFile(s.filePath())
@@ -130,8 +147,15 @@ func (s *Store) List() ([]Project, error) {
 	if err := json.Unmarshal(data, &projects); err != nil {
 		return nil, err
 	}
+	dirty := false
 	for i := range projects {
 		migrateProject(&projects[i])
+		if s.backfillBranches(&projects[i]) {
+			dirty = true
+		}
+	}
+	if dirty {
+		_ = s.save(projects)
 	}
 	return projects, nil
 }
@@ -257,7 +281,7 @@ func (s *Store) AddRepo(projectID, repoURL, branch, name string) (*Repository, e
 		ID:         repoID,
 		Name:       repoName,
 		RepoURL:    repoURL,
-		RepoBranch: branch,
+		RepoBranch: detectBranch(repoDir, branch),
 		RepoCloned: true,
 	}
 	p.Repositories = append(p.Repositories, r)
@@ -324,8 +348,21 @@ func (s *Store) ChangeRepoBranch(projectID, repoID, branch string) error {
 		return fmt.Errorf("git clone failed: %w", err)
 	}
 
-	target.RepoBranch = branch
+	target.RepoBranch = detectBranch(repoDir, branch)
 	return s.Update(p)
+}
+
+// detectBranch returns the provided branch if non-empty; otherwise reads the
+// active branch from the cloned repo via git rev-parse.
+func detectBranch(repoDir, requested string) string {
+	if requested != "" {
+		return requested
+	}
+	out, err := exec.Command("git", "-C", repoDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // ConnectRepo clones a repository into the project's legacy source directory.

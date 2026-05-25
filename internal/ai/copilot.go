@@ -72,6 +72,33 @@ func (p *SDKProvider) start() {
 	p.startErr = p.client.Start(context.Background())
 }
 
+func toolEventFromExecution(d *copilot.ToolExecutionStartData) ToolEvent {
+	ev := ToolEvent{Name: d.ToolName}
+	name := strings.ToLower(d.ToolName)
+	switch {
+	case strings.Contains(name, "read") || strings.Contains(name, "view") || strings.Contains(name, "cat"):
+		ev.Kind = "read"
+	case strings.Contains(name, "write") || strings.Contains(name, "edit") || strings.Contains(name, "create"):
+		ev.Kind = "write"
+	case strings.Contains(name, "bash") || strings.Contains(name, "shell") || strings.Contains(name, "exec") || strings.Contains(name, "run"):
+		ev.Kind = "shell"
+	case strings.Contains(name, "url") || strings.Contains(name, "fetch") || strings.Contains(name, "http"):
+		ev.Kind = "url"
+	default:
+		ev.Kind = "custom-tool"
+	}
+	// Extract file path from tool arguments (map keys vary by tool)
+	if args, ok := d.Arguments.(map[string]any); ok {
+		for _, key := range []string{"path", "file_path", "filename", "file", "filepath"} {
+			if val, ok := args[key].(string); ok && val != "" {
+				ev.Path = val
+				break
+			}
+		}
+	}
+	return ev
+}
+
 func (p *SDKProvider) Stop() {
 	p.once.Do(func() {}) // prevent double-start if Stop called before any request
 	if p.client != nil {
@@ -80,6 +107,35 @@ func (p *SDKProvider) Stop() {
 }
 
 func (p *SDKProvider) Complete(ctx context.Context, messages []Message) (string, error) {
+	return p.CompleteWithEvents(ctx, messages, nil, nil)
+}
+
+func convertTools(tools []Tool) []copilot.Tool {
+	result := make([]copilot.Tool, len(tools))
+	for i, t := range tools {
+		t := t
+		result[i] = copilot.Tool{
+			Name:           t.Name,
+			Description:    t.Description,
+			Parameters:     t.Parameters,
+			SkipPermission: true,
+			Handler: func(inv copilot.ToolInvocation) (copilot.ToolResult, error) {
+				args, _ := inv.Arguments.(map[string]any)
+				text, err := t.Handler(args)
+				if err != nil {
+					return copilot.ToolResult{}, err
+				}
+				return copilot.ToolResult{
+					TextResultForLLM: text,
+					ResultType:       "success",
+				}, nil
+			},
+		}
+	}
+	return result
+}
+
+func (p *SDKProvider) CompleteWithEvents(ctx context.Context, messages []Message, tools []Tool, onEvent func(ToolEvent)) (string, error) {
 	p.once.Do(p.start)
 	if p.startErr != nil {
 		return "", fmt.Errorf("copilot start: %w", p.startErr)
@@ -97,6 +153,8 @@ func (p *SDKProvider) Complete(ctx context.Context, messages []Message) (string,
 
 	cfg := &copilot.SessionConfig{
 		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
+		// AvailableTools:      []string{"read", "shell", "url", "bash"},
+		Tools: convertTools(tools),
 	}
 	if p.model != "" {
 		cfg.Model = p.model
@@ -114,18 +172,47 @@ func (p *SDKProvider) Complete(ctx context.Context, messages []Message) (string,
 	}
 	defer session.Disconnect()
 
-	reply, err := session.SendAndWait(ctx, copilot.MessageOptions{
-		Prompt: user.String(),
+	doneCh := make(chan error, 1)
+	var content strings.Builder
+	var mu sync.Mutex
+	unsubscribe := session.On(func(event copilot.SessionEvent) {
+		switch d := event.Data.(type) {
+		case *copilot.AssistantMessageData:
+			mu.Lock()
+			content.WriteString(d.Content)
+			mu.Unlock()
+		case *copilot.ToolExecutionStartData:
+			if onEvent != nil {
+				onEvent(toolEventFromExecution(d))
+			}
+		case *copilot.SessionIdleData:
+			select {
+			case doneCh <- nil:
+			default:
+			}
+		case *copilot.SessionErrorData:
+			select {
+			case doneCh <- fmt.Errorf("session error: %s", d.Message):
+			default:
+			}
+		}
 	})
-	if err != nil {
+	defer unsubscribe()
+
+	if _, err := session.Send(ctx, copilot.MessageOptions{Prompt: user.String()}); err != nil {
 		return "", fmt.Errorf("copilot send: %w", err)
 	}
-	if reply == nil {
-		return "", fmt.Errorf("no response from Copilot")
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			return "", err
+		}
+		mu.Lock()
+		result := content.String()
+		mu.Unlock()
+		return result, nil
+	case <-ctx.Done():
+		return "", fmt.Errorf("copilot timeout: %w", ctx.Err())
 	}
-	d, ok := reply.Data.(*copilot.AssistantMessageData)
-	if !ok {
-		return "", fmt.Errorf("unexpected response type: %T", reply.Data)
-	}
-	return d.Content, nil
 }

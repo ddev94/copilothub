@@ -350,14 +350,51 @@ func (h *Handler) projectFilesDir(pid string) string {
 	return filepath.Join(h.dataDir, "projects", pid, knowledgeFilesDir)
 }
 
+// maxEmbeddingChars is a safe character limit to stay within the 512-token
+// embedding model constraint (~4 chars per token on average).
+const maxEmbeddingChars = 1800
+
+// splitQueryChunks splits a long query into overlapping chunks, each within
+// maxEmbeddingChars, splitting at paragraph or word boundaries.
+func splitQueryChunks(q string) []string {
+	if len(q) <= maxEmbeddingChars {
+		return []string{q}
+	}
+	var chunks []string
+	for len(q) > 0 {
+		if len(q) <= maxEmbeddingChars {
+			chunks = append(chunks, q)
+			break
+		}
+		cut := q[:maxEmbeddingChars]
+		// Prefer paragraph boundary, then word boundary.
+		if idx := strings.LastIndex(cut, "\n\n"); idx > maxEmbeddingChars/2 {
+			cut = cut[:idx]
+		} else if idx := strings.LastIndexAny(cut, "\n "); idx > maxEmbeddingChars/2 {
+			cut = cut[:idx]
+		}
+		chunks = append(chunks, strings.TrimSpace(cut))
+		q = strings.TrimSpace(q[len(cut):])
+	}
+	return chunks
+}
+
 func (h *Handler) retrieveRelatedChunks(ctx context.Context, projectID, question string) ([]knowledge.Chunk, error) {
 	c := h.kc.Load()
 	if c == nil {
 		return nil, fmt.Errorf("knowledge store chưa sẵn sàng")
 	}
-	mainChunks, err := c.Retrieve(ctx, projectID, question, h.topK)
-	if err != nil {
-		return nil, err
+
+	// For long queries (e.g. full spec documents), split into chunks and
+	// retrieve for each part so we don't exceed the embedding model's limit.
+	queryChunks := splitQueryChunks(question)
+	var mainChunks []knowledge.Chunk
+	for _, qc := range queryChunks {
+		got, err := c.Retrieve(ctx, projectID, qc, h.topK)
+		if err != nil {
+			return nil, err
+		}
+		mainChunks = append(mainChunks, got...)
 	}
 
 	// Extract key terms for broader retrieval
@@ -365,6 +402,9 @@ func (h *Handler) retrieveRelatedChunks(ctx context.Context, projectID, question
 	var relatedChunks []knowledge.Chunk
 	if len(words) > 2 {
 		subQuery := strings.Join(words[:len(words)/2], " ")
+		if len(subQuery) > maxEmbeddingChars {
+			subQuery = subQuery[:maxEmbeddingChars]
+		}
 		if sub, err := c.Retrieve(ctx, projectID, subQuery, h.topK/2); err == nil {
 			relatedChunks = append(relatedChunks, sub...)
 		}

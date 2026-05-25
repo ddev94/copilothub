@@ -119,6 +119,12 @@ export interface AuthStatus {
   cliPath: string;
 }
 
+export interface ToolEvent {
+  kind: "read" | "write" | "shell" | "url" | "mcp" | "custom-tool" | "hook" | "memory";
+  path?: string;
+  name?: string;
+}
+
 export type IssueSeverity = "high" | "medium" | "low";
 export type IssueCategory = "gap" | "conflict" | "ambiguity" | "suggestion";
 
@@ -131,18 +137,8 @@ export interface ClarifyIssue {
   suggestion: string;
 }
 
-export interface ClarifyQuestion {
-  id: string;
-  issueId?: string;
-  question: string;
-  context: string;
-  options: string[];
-  defaultAnswer: string;
-}
-
 export interface ClarifyResponse {
   issues: ClarifyIssue[];
-  questions: ClarifyQuestion[];
   summary: string;
 }
 
