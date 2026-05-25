@@ -1,43 +1,48 @@
 package knowledge
 
-import "strings"
+import (
+	"strings"
 
-// splitText splits text into overlapping chunks, preferring paragraph/sentence boundaries.
-func splitText(text string, chunkSize, overlap int) []string {
+	"github.com/tmc/langchaingo/textsplitter"
+)
+
+const (
+	defaultChunkSize    = 800
+	defaultChunkOverlap = 100
+)
+
+// splitMarkdown splits Markdown text respecting header boundaries and heading hierarchy.
+func splitMarkdown(text string, chunkSize, overlap int) []string {
 	text = strings.TrimSpace(text)
-	if len(text) == 0 {
+	if text == "" {
 		return nil
 	}
-	if len(text) <= chunkSize {
-		return []string{text}
+	splitter := textsplitter.NewMarkdownTextSplitter(
+		textsplitter.WithChunkSize(chunkSize),
+		textsplitter.WithChunkOverlap(overlap),
+		textsplitter.WithHeadingHierarchy(true),
+		textsplitter.WithCodeBlocks(true),
+	)
+	chunks, err := splitter.SplitText(text)
+	if err != nil || len(chunks) == 0 {
+		return splitText(text, chunkSize, overlap)
 	}
+	return chunks
+}
 
-	var chunks []string
-	start := 0
-	for start < len(text) {
-		end := start + chunkSize
-		if end >= len(text) {
-			chunk := strings.TrimSpace(text[start:])
-			if chunk != "" {
-				chunks = append(chunks, chunk)
-			}
-			break
-		}
-		seg := text[start:end]
-		if i := strings.LastIndex(seg, "\n\n"); i > chunkSize/4 {
-			end = start + i
-		} else if i := strings.LastIndex(seg, ". "); i > chunkSize/4 {
-			end = start + i + 1
-		}
-		chunk := strings.TrimSpace(text[start:end])
-		if chunk != "" {
-			chunks = append(chunks, chunk)
-		}
-		next := end - overlap
-		if next <= start {
-			next = start + 1
-		}
-		start = next
+// splitText splits plain text (PDF, DOCX, etc.) using recursive character splitting.
+func splitText(text string, chunkSize, overlap int) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	splitter := textsplitter.NewRecursiveCharacter(
+		textsplitter.WithChunkSize(chunkSize),
+		textsplitter.WithChunkOverlap(overlap),
+	)
+	chunks, err := splitter.SplitText(text)
+	if err != nil {
+		return nil
 	}
 	return chunks
 }

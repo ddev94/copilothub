@@ -52,6 +52,7 @@ const effectiveRepoIds = computed<string[] | undefined>(() => {
     .map((r) => r.id);
 });
 
+
 function repoDisplayName(repoURL: string, name?: string) {
   return (
     name ||
@@ -270,7 +271,10 @@ function toolEventLabel(ev: ToolEvent) {
   return ev.kind;
 }
 
-function severityClass(severity: string) {
+function severityClass(severity: string, category?: string) {
+  if (category === "code_wiki_conflict") {
+    return "bg-purple-50 border-purple-200 text-purple-700 dark:bg-purple-950/30 dark:border-purple-800 dark:text-purple-400";
+  }
   switch (severity) {
     case "high":
       return "bg-red-50 border-red-200 text-red-700 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400";
@@ -304,6 +308,8 @@ function categoryIcon(category: string) {
       return "❓";
     case "inaccuracy":
       return "✗";
+    case "code_wiki_conflict":
+      return "⚡";
     // legacy fallbacks
     case "gap":
       return "⚡";
@@ -328,6 +334,8 @@ function categoryLabel(category: string) {
       return "Mơ hồ";
     case "inaccuracy":
       return "Sai";
+    case "code_wiki_conflict":
+      return "Code ≠ Wiki";
     // legacy fallbacks
     case "gap":
       return "Thiếu";
@@ -717,7 +725,7 @@ function categoryLabel(category: string) {
               :class="[
                 isResolved(issue.id)
                   ? 'opacity-40 bg-muted/30 border-border'
-                  : severityClass(issue.severity),
+                  : severityClass(issue.severity, issue.category),
               ]"
             >
               <div class="flex items-start justify-between gap-2">
@@ -786,6 +794,39 @@ function categoryLabel(category: string) {
                     <span v-else>✦</span>
                     {{ fixingIssueId === issue.id ? "Đang fix..." : "Fix" }}
                   </button>
+                </div>
+
+                <!-- Referenced files & wiki sections for this issue -->
+                <div
+                  v-if="issue.referenced_files?.length || issue.wiki_sections?.length"
+                  class="border-t border-current/10 pt-2 space-y-1"
+                >
+                  <div v-if="issue.referenced_files?.length" class="flex flex-col gap-0.5">
+                    <span class="text-[10px] opacity-50 font-medium">📁 Files tham khảo</span>
+                    <template v-for="f in issue.referenced_files" :key="f.path">
+                      <a
+                        v-if="f.url"
+                        :href="f.url"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="text-[10px] font-mono text-blue-600 hover:underline truncate pl-3"
+                        :title="f.path"
+                      >{{ f.path }}</a>
+                      <span
+                        v-else
+                        class="text-[10px] font-mono opacity-60 truncate pl-3"
+                        :title="f.path"
+                      >{{ f.path }}</span>
+                    </template>
+                  </div>
+                  <div v-if="issue.wiki_sections?.length" class="flex flex-col gap-0.5">
+                    <span class="text-[10px] opacity-50 font-medium">📖 Wiki sections</span>
+                    <span
+                      v-for="s in issue.wiki_sections"
+                      :key="s"
+                      class="text-[10px] opacity-60 pl-3"
+                    >{{ s }}</span>
+                  </div>
                 </div>
               </template>
             </div>

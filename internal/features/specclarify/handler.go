@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -61,7 +63,8 @@ Output MUST be valid JSON:
       "severity": "high|medium|low",
       "title": "Tên ngắn của vấn đề",
       "description": "Mô tả cụ thể: spec đang viết gì (hoặc không viết gì), tại sao dev sẽ bị block/stuck ở đây",
-      "suggestion": "Viết sẵn text cần thêm hoặc sửa vào spec. Ví dụ: 'Thêm vào spec: [text cụ thể]' hoặc 'Sửa \"[text cũ]\" thành \"[text mới]\"'"
+      "suggestion": "Viết sẵn text cần thêm hoặc sửa vào spec. Ví dụ: 'Thêm vào spec: [text cụ thể]' hoặc 'Sửa \"[text cũ]\" thành \"[text mới]\"'",
+      "referenced_files": ["path/to/file.go:10-25"]
     }
   ]
 }
@@ -79,6 +82,11 @@ Output MUST be valid JSON:
 - Nếu tìm thấy behavior thực tế từ code, thêm dòng "📎 Ref: <path/to/file.go> (line X)" vào cuối suggestion
 - KHÔNG viết chung chung như "làm rõ thêm" hay "bổ sung thông tin"
 - KHÔNG bao giờ gợi ý sửa code
+
+## Rules for "referenced_files" field
+- List the source files you actually read that are directly relevant to THIS specific issue
+- Use relative paths from the repository root
+- Omit if no source file is relevant to this issue
 
 Output ONLY valid JSON. Language is Vietnamese.`
 
@@ -98,6 +106,7 @@ You have BOTH source code access AND wiki/documentation. Use them together:
 3. MISSING CONSTRAINTS: What are the validation rules? Character limits? Allowed values? Business rules from wiki not reflected in spec?
 4. AMBIGUITY: Any requirement a developer could interpret in 2+ different ways?
 5. INACCURACY: Does the spec contradict what the code actually does OR misrepresent what the wiki documents?
+6. CODE-WIKI CONFLICT: Does the source code do something DIFFERENT from what the wiki documents? Surface this — do NOT pick a side.
 
 ## Output format
 
@@ -107,14 +116,15 @@ Output MUST be valid JSON:
   "issues": [
     {
       "id": "i1",
-      "category": "missing_flow|missing_edge_case|missing_constraint|ambiguity|inaccuracy",
+      "category": "missing_flow|missing_edge_case|missing_constraint|ambiguity|inaccuracy|code_wiki_conflict",
       "severity": "high|medium|low",
       "title": "Tên ngắn của vấn đề",
       "description": "Mô tả cụ thể: spec đang viết gì (hoặc không viết gì), tại sao dev sẽ bị block/stuck ở đây",
-      "suggestion": "Viết sẵn text cần thêm hoặc sửa vào spec. Ví dụ: 'Thêm vào spec: [text cụ thể]' hoặc 'Sửa \"[text cũ]\" thành \"[text mới]\"'"
+      "suggestion": "Viết sẵn text cần thêm hoặc sửa vào spec. Ví dụ: 'Thêm vào spec: [text cụ thể]' hoặc 'Sửa \"[text cũ]\" thành \"[text mới]\"'",
+      "referenced_files": ["path/to/file.go:10-25"],
+      "wiki_sections": ["Tên section/heading trong wiki liên quan đến issue này"]
     }
-  ],
-  "wiki_sections": ["Tên section/heading trong wiki mà bạn đã dùng làm căn cứ"]
+  ]
 }
 
 ## Category meanings
@@ -122,7 +132,8 @@ Output MUST be valid JSON:
 - missing_edge_case: Trường hợp đặc biệt chưa được mô tả
 - missing_constraint: Rule validation, giới hạn, hoặc điều kiện nghiệp vụ chưa được specify
 - ambiguity: Yêu cầu quá mơ hồ — một dev có thể hiểu thành 2+ cách khác nhau
-- inaccuracy: Spec mô tả sai so với code thực tế hoặc mâu thuẫn với wiki
+- inaccuracy: Spec mô tả sai so với code thực tế HOẶC sai so với wiki (nhưng code và wiki đồng nhất)
+- code_wiki_conflict: Code đang làm X nhưng wiki quy định Y — hai nguồn mâu thuẫn nhau. KHÔNG tự phán xét ai đúng. Spec cần BA xác nhận follow cái nào.
 
 ## Rules for "suggestion" field
 - PHẢI cụ thể — viết sẵn đoạn text để BA copy-paste vào spec
@@ -131,6 +142,11 @@ Output MUST be valid JSON:
 - Nếu lấy từ wiki, thêm "📖 Wiki: [tên section]" vào cuối suggestion
 - KHÔNG viết chung chung như "làm rõ thêm" hay "bổ sung thông tin"
 - KHÔNG bao giờ gợi ý sửa code hoặc wiki
+- Với code_wiki_conflict: suggestion phải nêu rõ "Code đang làm [X], wiki quy định [Y] — BA cần xác nhận spec follow cái nào trước khi dev thực hiện"
+
+## Rules for referenced_files / wiki_sections per issue
+- referenced_files: list các source files bạn đọc liên quan đến issue này; include line numbers khi có thể, format: "path/to/file.go:10-25" (omit if none)
+- wiki_sections: list các heading/section wiki bạn dùng làm căn cứ cho issue này (omit if none)
 
 Output ONLY valid JSON. Language is Vietnamese.`
 
@@ -161,10 +177,10 @@ Output MUST be valid JSON:
       "severity": "high|medium|low",
       "title": "Tên ngắn của vấn đề",
       "description": "Mô tả cụ thể: spec đang viết gì (hoặc không viết gì), tại sao dev sẽ bị block/stuck ở đây",
-      "suggestion": "Viết sẵn text cần thêm hoặc sửa vào spec. Ví dụ: 'Thêm vào spec: [text cụ thể]' hoặc 'Sửa \"[text cũ]\" thành \"[text mới]\"'"
+      "suggestion": "Viết sẵn text cần thêm hoặc sửa vào spec. Ví dụ: 'Thêm vào spec: [text cụ thể]' hoặc 'Sửa \"[text cũ]\" thành \"[text mới]\"'",
+      "wiki_sections": ["Tên section/heading trong wiki liên quan đến issue này"]
     }
-  ],
-  "wiki_sections": ["Tên section/heading trong wiki mà bạn đã dùng làm căn cứ"]
+  ]
 }
 
 ## Category meanings
@@ -180,6 +196,9 @@ Output MUST be valid JSON:
 - KHÔNG viết chung chung như "làm rõ thêm" hay "bổ sung thông tin"
 - KHÔNG bao giờ gợi ý sửa wiki
 
+## Rules for "wiki_sections" per issue
+- List heading/section names from the wiki that you used as the basis for this specific issue (omit if none)
+
 Output ONLY valid JSON. Language is Vietnamese.`
 
 type clarifyReq struct {
@@ -191,20 +210,25 @@ type clarifyReq struct {
 	RepoIDs     []string `json:"repoIds"` // empty = all repos
 }
 
+type fileRef struct {
+	Path string `json:"path"`
+	URL  string `json:"url,omitempty"`
+}
+
 type clarifyIssue struct {
-	ID          string `json:"id"`
-	Category    string `json:"category"`
-	Severity    string `json:"severity"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Suggestion  string `json:"suggestion"`
+	ID              string    `json:"id"`
+	Category        string    `json:"category"`
+	Severity        string    `json:"severity"`
+	Title           string    `json:"title"`
+	Description     string    `json:"description"`
+	Suggestion      string    `json:"suggestion"`
+	ReferencedFiles []fileRef `json:"referenced_files,omitempty"`
+	WikiSections    []string  `json:"wiki_sections,omitempty"`
 }
 
 type clarifyResponse struct {
-	Summary         string         `json:"summary"`
-	Issues          []clarifyIssue `json:"issues"`
-	ReferencedFiles []string       `json:"referenced_files,omitempty"`
-	WikiSections    []string       `json:"wiki_sections,omitempty"`
+	Summary string         `json:"summary"`
+	Issues  []clarifyIssue `json:"issues"`
 }
 
 func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
@@ -248,9 +272,10 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 			info, _ := scanner.Scan()
 			appendRepoContext(&prompt, path, info)
 		}
-		fmt.Fprintf(&prompt, "Wiki/Documentation (business rules reference):\n%s\n\n", req.WikiContent)
-		fmt.Fprintf(&prompt, "Spec document:\n%s\n\n", req.Spec)
-		prompt.WriteString("Use your file reading tools to explore the repository paths above. Cross-reference the spec against both the source code and the wiki content provided. Read actual source files to verify behavior before identifying issues.")
+		prompt.WriteString("STEP 1 — Bắt buộc: dùng file reading tools để khám phá repository ở trên. Đọc các route, model, handler, validation liên quan đến spec trước khi phân tích.\n\n")
+		fmt.Fprintf(&prompt, "STEP 2 — Spec document:\n%s\n\n", req.Spec)
+		fmt.Fprintf(&prompt, "STEP 3 — Wiki/Documentation (business rules reference):\n%s\n\n", req.WikiContent)
+		prompt.WriteString("Bây giờ cross-reference spec với cả source code bạn vừa đọc VÀ wiki ở trên. Xác định tất cả vấn đề.")
 	default: // "source"
 		systemPrompt = clarifyWithSourcePrompt
 		if req.ProjectPath != "" {
@@ -275,32 +300,29 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := aiContext(r)
 	defer cancel()
 
-	// Build source scanning tools for modes that access the codebase.
+	// Build source scanning tools and repo dir→metadata map for file URL resolution.
 	var sourceTools []ai.Tool
+	var repoDirs map[string]project.Repository
 	if req.Mode == "source" || req.Mode == "both" {
 		if len(sourcePaths) > 0 {
 			sourceTools = tools.SourceScanTools(sourcePaths)
+		}
+		if req.ProjectID != "" && h.projectStore != nil {
+			repoDirs = h.projectStore.ReposWithSourceDirs(req.ProjectID, req.RepoIDs)
 		}
 	}
 
 	ep, hasEvents := h.provider.(ai.EventingProvider)
 	if hasEvents {
 		if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
-			h.clarifySSE(w, ctx, messages, sourceTools, ep)
+			h.clarifySSE(w, ctx, messages, sourceTools, repoDirs, ep)
 		} else {
-			var readFiles []string
-			result, err := ep.CompleteWithEvents(ctx, messages, sourceTools, func(ev ai.ToolEvent) {
-				if ev.Kind == "read" && ev.Path != "" {
-					readFiles = append(readFiles, ev.Path)
-				}
-			})
+			result, err := ep.CompleteWithEvents(ctx, messages, sourceTools, nil)
 			if err != nil {
 				writeError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			resp := parseClarifyResult(result)
-			resp.ReferencedFiles = uniqueStrings(readFiles)
-			writeJSON(w, resp)
+			writeJSON(w, parseClarifyResult(result, repoDirs))
 		}
 		return
 	}
@@ -310,10 +332,10 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, parseClarifyResult(result))
+	writeJSON(w, parseClarifyResult(result, repoDirs))
 }
 
-func (h *Handler) clarifySSE(w http.ResponseWriter, ctx context.Context, messages []ai.Message, sourceTools []ai.Tool, ep ai.EventingProvider) {
+func (h *Handler) clarifySSE(w http.ResponseWriter, ctx context.Context, messages []ai.Message, sourceTools []ai.Tool, repoDirs map[string]project.Repository, ep ai.EventingProvider) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -327,32 +349,109 @@ func (h *Handler) clarifySSE(w http.ResponseWriter, ctx context.Context, message
 		}
 	}
 
-	var readFiles []string
 	result, err := ep.CompleteWithEvents(ctx, messages, sourceTools, func(ev ai.ToolEvent) {
 		sendEvent("tool", ev)
-		if ev.Kind == "read" && ev.Path != "" {
-			readFiles = append(readFiles, ev.Path)
-		}
 	})
 	if err != nil {
 		sendEvent("error", map[string]string{"error": err.Error()})
 		return
 	}
-	resp := parseClarifyResult(result)
-	resp.ReferencedFiles = uniqueStrings(readFiles)
-	sendEvent("result", resp)
+	sendEvent("result", parseClarifyResult(result, repoDirs))
 }
 
-func parseClarifyResult(raw string) clarifyResponse {
-	var resp clarifyResponse
-	if err := json.Unmarshal([]byte(cleanJSON(raw)), &resp); err != nil {
-		// Return empty response rather than crashing; caller can surface the error via SSE error event
-		resp = clarifyResponse{}
+// aiClarifyIssue mirrors clarifyIssue but keeps referenced_files as []string
+// since that is what the AI emits; resolved to []fileRef after parsing.
+type aiClarifyIssue struct {
+	ID              string   `json:"id"`
+	Category        string   `json:"category"`
+	Severity        string   `json:"severity"`
+	Title           string   `json:"title"`
+	Description     string   `json:"description"`
+	Suggestion      string   `json:"suggestion"`
+	ReferencedFiles []string `json:"referenced_files,omitempty"`
+	WikiSections    []string `json:"wiki_sections,omitempty"`
+}
+
+type aiClarifyResponse struct {
+	Summary string           `json:"summary"`
+	Issues  []aiClarifyIssue `json:"issues"`
+}
+
+func parseClarifyResult(raw string, repoDirs map[string]project.Repository) clarifyResponse {
+	var ai aiClarifyResponse
+	if err := json.Unmarshal([]byte(cleanJSON(raw)), &ai); err != nil {
+		return clarifyResponse{Issues: []clarifyIssue{}}
+	}
+	resp := clarifyResponse{Summary: ai.Summary}
+	for _, iss := range ai.Issues {
+		ci := clarifyIssue{
+			ID:           iss.ID,
+			Category:     iss.Category,
+			Severity:     iss.Severity,
+			Title:        iss.Title,
+			Description:  iss.Description,
+			Suggestion:   iss.Suggestion,
+			WikiSections: iss.WikiSections,
+		}
+		for _, raw := range iss.ReferencedFiles {
+			ci.ReferencedFiles = append(ci.ReferencedFiles, resolveFileRef(raw, repoDirs))
+		}
+		resp.Issues = append(resp.Issues, ci)
 	}
 	if resp.Issues == nil {
 		resp.Issues = []clarifyIssue{}
 	}
 	return resp
+}
+
+// resolveFileRef parses "path/to/file.go:10-25" and resolves a GitHub URL
+// by stat-checking each repo clone dir.
+func resolveFileRef(raw string, repoDirs map[string]project.Repository) fileRef {
+	ref := fileRef{Path: raw}
+	// Parse optional line range suffix: "file.go:10-25" or "file.go:10"
+	filePath := raw
+	lines := ""
+	if idx := strings.LastIndex(raw, ":"); idx > 0 {
+		suffix := raw[idx+1:]
+		if isLineRange(suffix) {
+			filePath = raw[:idx]
+			lines = suffix
+		}
+	}
+	for dir, repo := range repoDirs {
+		if _, err := os.Stat(filepath.Join(dir, filePath)); err == nil {
+			ref.URL = buildGitHubURL(repo.RepoURL, repo.RepoBranch, filePath, lines)
+			return ref
+		}
+	}
+	return ref
+}
+
+func isLineRange(s string) bool {
+	for _, c := range s {
+		if c != '-' && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+func buildGitHubURL(repoURL, branch, path, lines string) string {
+	base := strings.TrimSuffix(repoURL, ".git")
+	base = strings.TrimSuffix(base, "/")
+	base = strings.Replace(base, "git@github.com:", "https://github.com/", 1)
+	if branch == "" {
+		branch = "main"
+	}
+	anchor := ""
+	if lines != "" {
+		if idx := strings.Index(lines, "-"); idx >= 0 {
+			anchor = "#L" + lines[:idx] + "-L" + lines[idx+1:]
+		} else {
+			anchor = "#L" + lines
+		}
+	}
+	return fmt.Sprintf("%s/blob/%s/%s%s", base, branch, path, anchor)
 }
 
 // === Refine Spec ===

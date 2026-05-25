@@ -98,6 +98,29 @@ func (s *Store) SourceDirsForRepos(projectID string, repoIDs []string) []string 
 	return dirs
 }
 
+// ReposWithSourceDirs returns a map of cloneDir → Repository for the given repo IDs.
+// If repoIDs is empty, all cloned repos are included.
+func (s *Store) ReposWithSourceDirs(projectID string, repoIDs []string) map[string]Repository {
+	p, err := s.Get(projectID)
+	if err != nil {
+		return nil
+	}
+	idSet := make(map[string]bool, len(repoIDs))
+	for _, id := range repoIDs {
+		idSet[id] = true
+	}
+	result := map[string]Repository{}
+	for _, r := range p.Repositories {
+		if !r.RepoCloned {
+			continue
+		}
+		if len(repoIDs) == 0 || idSet[r.ID] {
+			result[s.RepoSourceDir(projectID, r.ID)] = r
+		}
+	}
+	return result
+}
+
 // migrateProject converts the legacy single-repo fields into the Repositories slice.
 func migrateProject(p *Project) {
 	if p.RepoURL != "" && len(p.Repositories) == 0 {

@@ -121,7 +121,12 @@ func (c *Client) Ingest(ctx context.Context, projectID, filePath, fileName, _ st
 		return fmt.Errorf("no text extracted from %s", fileName)
 	}
 
-	chunks := splitText(text, 800, 100)
+	var chunks []string
+	if ext := strings.ToLower(filepath.Ext(fileName)); ext == ".md" || ext == ".markdown" {
+		chunks = splitMarkdown(text, 800, 100)
+	} else {
+		chunks = splitText(text, 800, 100)
+	}
 	if len(chunks) == 0 {
 		return fmt.Errorf("document produced no chunks: %s", fileName)
 	}

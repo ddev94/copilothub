@@ -126,7 +126,12 @@ export interface ToolEvent {
 }
 
 export type IssueSeverity = "high" | "medium" | "low";
-export type IssueCategory = "gap" | "conflict" | "ambiguity" | "suggestion";
+export type IssueCategory = "gap" | "conflict" | "ambiguity" | "suggestion" | "missing_flow" | "missing_edge_case" | "missing_constraint" | "inaccuracy" | "code_wiki_conflict";
+
+export interface FileRef {
+  path: string;
+  url?: string;
+}
 
 export interface ClarifyIssue {
   id: string;
@@ -135,11 +140,13 @@ export interface ClarifyIssue {
   title: string;
   description: string;
   suggestion: string;
+  referenced_files?: FileRef[];
+  wiki_sections?: string[];
 }
 
 export interface ClarifyResponse {
-  issues: ClarifyIssue[];
   summary: string;
+  issues: ClarifyIssue[];
 }
 
 export interface RefineResponse {

@@ -72,33 +72,6 @@ func (p *SDKProvider) start() {
 	p.startErr = p.client.Start(context.Background())
 }
 
-func toolEventFromExecution(d *copilot.ToolExecutionStartData) ToolEvent {
-	ev := ToolEvent{Name: d.ToolName}
-	name := strings.ToLower(d.ToolName)
-	switch {
-	case strings.Contains(name, "read") || strings.Contains(name, "view") || strings.Contains(name, "cat"):
-		ev.Kind = "read"
-	case strings.Contains(name, "write") || strings.Contains(name, "edit") || strings.Contains(name, "create"):
-		ev.Kind = "write"
-	case strings.Contains(name, "bash") || strings.Contains(name, "shell") || strings.Contains(name, "exec") || strings.Contains(name, "run"):
-		ev.Kind = "shell"
-	case strings.Contains(name, "url") || strings.Contains(name, "fetch") || strings.Contains(name, "http"):
-		ev.Kind = "url"
-	default:
-		ev.Kind = "custom-tool"
-	}
-	// Extract file path from tool arguments (map keys vary by tool)
-	if args, ok := d.Arguments.(map[string]any); ok {
-		for _, key := range []string{"path", "file_path", "filename", "file", "filepath"} {
-			if val, ok := args[key].(string); ok && val != "" {
-				ev.Path = val
-				break
-			}
-		}
-	}
-	return ev
-}
-
 func (p *SDKProvider) Stop() {
 	p.once.Do(func() {}) // prevent double-start if Stop called before any request
 	if p.client != nil {
@@ -110,10 +83,9 @@ func (p *SDKProvider) Complete(ctx context.Context, messages []Message) (string,
 	return p.CompleteWithEvents(ctx, messages, nil, nil)
 }
 
-func convertTools(tools []Tool) []copilot.Tool {
+func convertTools(tools []Tool, onEvent func(ToolEvent)) []copilot.Tool {
 	result := make([]copilot.Tool, len(tools))
 	for i, t := range tools {
-		t := t
 		result[i] = copilot.Tool{
 			Name:           t.Name,
 			Description:    t.Description,
@@ -121,6 +93,9 @@ func convertTools(tools []Tool) []copilot.Tool {
 			SkipPermission: true,
 			Handler: func(inv copilot.ToolInvocation) (copilot.ToolResult, error) {
 				args, _ := inv.Arguments.(map[string]any)
+				if onEvent != nil {
+					onEvent(toolEventFromArgs(inv.ToolName, args))
+				}
 				text, err := t.Handler(args)
 				if err != nil {
 					return copilot.ToolResult{}, err
@@ -133,6 +108,30 @@ func convertTools(tools []Tool) []copilot.Tool {
 		}
 	}
 	return result
+}
+
+func toolEventFromArgs(toolName string, args map[string]any) ToolEvent {
+	ev := ToolEvent{Name: toolName}
+	name := strings.ToLower(toolName)
+	switch {
+	case strings.Contains(name, "read"):
+		ev.Kind = "read"
+	case strings.Contains(name, "write") || strings.Contains(name, "edit") || strings.Contains(name, "create"):
+		ev.Kind = "write"
+	case strings.Contains(name, "bash") || strings.Contains(name, "shell") || strings.Contains(name, "exec") || strings.Contains(name, "run"):
+		ev.Kind = "shell"
+	case strings.Contains(name, "url") || strings.Contains(name, "fetch") || strings.Contains(name, "http"):
+		ev.Kind = "url"
+	default:
+		ev.Kind = "custom-tool"
+	}
+	for _, key := range []string{"path", "file_path", "filename", "file", "filepath"} {
+		if val, _ := args[key].(string); val != "" {
+			ev.Path = val
+			break
+		}
+	}
+	return ev
 }
 
 func (p *SDKProvider) CompleteWithEvents(ctx context.Context, messages []Message, tools []Tool, onEvent func(ToolEvent)) (string, error) {
@@ -154,7 +153,7 @@ func (p *SDKProvider) CompleteWithEvents(ctx context.Context, messages []Message
 	cfg := &copilot.SessionConfig{
 		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
 		// AvailableTools:      []string{"read", "shell", "url", "bash"},
-		Tools: convertTools(tools),
+		Tools: convertTools(tools, onEvent),
 	}
 	if p.model != "" {
 		cfg.Model = p.model
@@ -181,10 +180,6 @@ func (p *SDKProvider) CompleteWithEvents(ctx context.Context, messages []Message
 			mu.Lock()
 			content.WriteString(d.Content)
 			mu.Unlock()
-		case *copilot.ToolExecutionStartData:
-			if onEvent != nil {
-				onEvent(toolEventFromExecution(d))
-			}
 		case *copilot.SessionIdleData:
 			select {
 			case doneCh <- nil:
