@@ -57,7 +57,7 @@ func NewSDKProvider(token, model, cwd string) *SDKProvider {
 }
 
 func (p *SDKProvider) start() {
-	opts := &copilot.ClientOptions{LogLevel: "error"}
+	opts := &copilot.ClientOptions{LogLevel: "error", WorkingDirectory: p.cwd}
 
 	if p.token != "" {
 		opts.GitHubToken = p.token
@@ -149,7 +149,8 @@ func (p *SDKProvider) CompleteWithEvents(ctx context.Context, messages []Message
 	cfg := &copilot.SessionConfig{
 		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
 		// AvailableTools:      []string{"read", "shell", "url", "bash"},
-		Tools: convertTools(tools, onEvent),
+		// Tools:            convertTools(tools, onEvent),
+		WorkingDirectory: p.cwd,
 	}
 	if p.model != "" {
 		cfg.Model = p.model
@@ -226,10 +227,11 @@ func (p *SDKProvider) CompleteWithSession(ctx context.Context, messages []Messag
 			user.WriteString(m.Content)
 		}
 	}
-
+	fmt.Println("Working with:", p.cwd)
 	cfg := &copilot.SessionConfig{
 		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
-		Tools:               convertTools(tools, onEvent),
+		// Tools:               convertTools(tools, onEvent),
+		WorkingDirectory: p.cwd,
 	}
 	if p.model != "" {
 		cfg.Model = p.model
@@ -264,6 +266,13 @@ func (p *SDKProvider) CompleteWithSession(ctx context.Context, messages []Messag
 			select {
 			case doneCh <- fmt.Errorf("session error: %s", d.Message):
 			default:
+			}
+		case *copilot.ToolExecutionStartData:
+			fmt.Println("Tool:", d.ToolName, "Args:", d.Arguments)
+		case *copilot.ToolExecutionCompleteData:
+			err := d.Error
+			if err != nil {
+				fmt.Println(err.Message, err.Code)
 			}
 		}
 	})

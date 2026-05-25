@@ -51,6 +51,15 @@ func (h *Handler) providerWithModel(model string) ai.Provider {
 	return ai.NewProvider(cfg.AI.Provider, cfg.AI.Token, model, cfg.AI.BaseURL, h.dataDir)
 }
 
+// providerWithCwd creates an AI provider with a specific working directory (cwd).
+func (h *Handler) providerWithCwd(model, cwd string) ai.Provider {
+	cfg, _ := h.cfgStore.Load()
+	if model == "" {
+		model = cfg.AI.Model
+	}
+	return ai.NewProvider(cfg.AI.Provider, cfg.AI.Token, model, cfg.AI.BaseURL, cwd)
+}
+
 // === Clarify Spec ===
 
 const clarifyWithSourcePrompt = `You are a senior Business Analyst / BRSE doing a final review of a spec before it is handed to developers.
@@ -304,8 +313,20 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		repoDirs = h.projectStore.ReposWithSourceDirs(req.ProjectID, req.RepoIDs)
 	}
 
-	p := h.providerWithModel(req.Model)
 	isSSE := strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+
+	// If we have multiple repos and are in source/both mode, iterate through each repo
+	if len(repoDirs) > 0 && (req.Mode == "source" || req.Mode == "both") {
+		if isSSE {
+			h.clarifyMultiRepoSSE(w, ctx, messages, repoDirs, req.Model)
+		} else {
+			h.clarifyMultiRepo(w, ctx, messages, repoDirs, req.Model)
+		}
+		return
+	}
+
+	// Fallback: single cwd (wiki mode or no repos)
+	p := h.providerWithModel(req.Model)
 
 	if csp, ok := p.(ai.ChatSessionProvider); ok {
 		if isSSE {
@@ -386,6 +407,139 @@ func (h *Handler) clarifySSELegacy(w http.ResponseWriter, ctx context.Context, m
 		return
 	}
 	sendEvent("result", parseClarifyResult(result, repoDirs))
+}
+
+// clarifyMultiRepo runs clarification for each repo sequentially and merges results.
+func (h *Handler) clarifyMultiRepo(w http.ResponseWriter, ctx context.Context, messages []ai.Message, repoDirs map[string]project.Repository, model string) {
+	var allIssues []clarifyIssue
+	var summaries []string
+	var lastSessionID string
+
+	for repoDir, repo := range repoDirs {
+		p := h.providerWithCwd(model, repoDir)
+
+		csp, ok := p.(ai.ChatSessionProvider)
+		if !ok {
+			// Fallback to simple completion
+			result, err := p.Complete(ctx, messages)
+			if err != nil {
+				continue
+			}
+			resp := parseClarifyResult(result, repoDirs)
+			for i := range resp.Issues {
+				resp.Issues[i].Title = fmt.Sprintf("[%s] %s", repo.Name, resp.Issues[i].Title)
+			}
+			allIssues = append(allIssues, resp.Issues...)
+			if resp.Summary != "" {
+				summaries = append(summaries, fmt.Sprintf("[%s] %s", repo.Name, resp.Summary))
+			}
+			continue
+		}
+
+		result, sessionID, err := csp.CompleteWithSession(ctx, messages, nil, nil)
+		if err != nil {
+			continue
+		}
+		lastSessionID = sessionID
+
+		resp := parseClarifyResult(result, repoDirs)
+		// Prefix issue titles with repo name for clarity
+		for i := range resp.Issues {
+			resp.Issues[i].Title = fmt.Sprintf("[%s] %s", repo.Name, resp.Issues[i].Title)
+		}
+		allIssues = append(allIssues, resp.Issues...)
+		if resp.Summary != "" {
+			summaries = append(summaries, fmt.Sprintf("[%s] %s", repo.Name, resp.Summary))
+		}
+	}
+
+	// Re-number issue IDs
+	for i := range allIssues {
+		allIssues[i].ID = fmt.Sprintf("i%d", i+1)
+	}
+
+	combinedResp := clarifyResponse{
+		Summary:   strings.Join(summaries, "\n"),
+		Issues:    allIssues,
+		SessionID: lastSessionID,
+	}
+	if combinedResp.Issues == nil {
+		combinedResp.Issues = []clarifyIssue{}
+	}
+	writeJSON(w, combinedResp)
+}
+
+// clarifyMultiRepoSSE runs clarification for each repo sequentially with SSE events.
+func (h *Handler) clarifyMultiRepoSSE(w http.ResponseWriter, ctx context.Context, messages []ai.Message, repoDirs map[string]project.Repository, model string) {
+	sendEvent, _ := sseWriter(w)
+
+	var allIssues []clarifyIssue
+	var summaries []string
+	var lastSessionID string
+
+	for repoDir, repo := range repoDirs {
+		// Notify frontend which repo we're scanning
+		sendEvent("repo", map[string]string{"name": repo.Name, "dir": repoDir})
+
+		p := h.providerWithCwd(model, repoDir)
+
+		csp, ok := p.(ai.ChatSessionProvider)
+		if !ok {
+			// Fallback to EventingProvider
+			if ep, epOk := p.(ai.EventingProvider); epOk {
+				result, err := ep.CompleteWithEvents(ctx, messages, nil, func(ev ai.ToolEvent) {
+					sendEvent("tool", ev)
+				})
+				if err != nil {
+					sendEvent("repo_error", map[string]string{"name": repo.Name, "error": err.Error()})
+					continue
+				}
+				resp := parseClarifyResult(result, repoDirs)
+				for i := range resp.Issues {
+					resp.Issues[i].Title = fmt.Sprintf("[%s] %s", repo.Name, resp.Issues[i].Title)
+				}
+				allIssues = append(allIssues, resp.Issues...)
+				if resp.Summary != "" {
+					summaries = append(summaries, fmt.Sprintf("[%s] %s", repo.Name, resp.Summary))
+				}
+			}
+			continue
+		}
+
+		result, sessionID, err := csp.CompleteWithSession(ctx, messages, nil, func(ev ai.ToolEvent) {
+			sendEvent("tool", ev)
+		})
+		if err != nil {
+			sendEvent("repo_error", map[string]string{"name": repo.Name, "error": err.Error()})
+			continue
+		}
+		lastSessionID = sessionID
+
+		resp := parseClarifyResult(result, repoDirs)
+		// Prefix issue titles with repo name
+		for i := range resp.Issues {
+			resp.Issues[i].Title = fmt.Sprintf("[%s] %s", repo.Name, resp.Issues[i].Title)
+		}
+		allIssues = append(allIssues, resp.Issues...)
+		if resp.Summary != "" {
+			summaries = append(summaries, fmt.Sprintf("[%s] %s", repo.Name, resp.Summary))
+		}
+	}
+
+	// Re-number issue IDs
+	for i := range allIssues {
+		allIssues[i].ID = fmt.Sprintf("i%d", i+1)
+	}
+
+	combinedResp := clarifyResponse{
+		Summary:   strings.Join(summaries, "\n"),
+		Issues:    allIssues,
+		SessionID: lastSessionID,
+	}
+	if combinedResp.Issues == nil {
+		combinedResp.Issues = []clarifyIssue{}
+	}
+	sendEvent("result", combinedResp)
 }
 
 // aiClarifyIssue mirrors clarifyIssue but keeps referenced_files as []string
