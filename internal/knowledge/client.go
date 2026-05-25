@@ -542,6 +542,342 @@ func (c *Client) knownFileNames(projectID string) map[string]bool {
 	return m
 }
 
+// ── Repo code indexing ──────────────────────────────────────────────
+
+// RepoIndexStatus tracks the indexing state of a repository.
+type RepoIndexStatus struct {
+	State      string `json:"state"` // "none" | "indexing" | "indexed" | "error"
+	TotalFiles int    `json:"totalFiles"`
+	DoneFiles  int    `json:"doneFiles"`
+	Percent    int    `json:"percent"`
+	Message    string `json:"message,omitempty"`
+	IndexedAt  string `json:"indexedAt,omitempty"`
+}
+
+// repoCollectionName returns the chromem collection name for a repo's code index.
+func repoCollectionName(projectID, repoID string) string {
+	return "code_" + projectID + "_" + repoID
+}
+
+// repoMetaKey returns a synthetic doc ID prefix for repo code entries.
+func repoMetaKey(projectID, repoID string) string {
+	return "repo:" + projectID + ":" + repoID
+}
+
+// IndexRepoAsync indexes all source code in a repository directory asynchronously.
+// Returns immediately; progress is broadcast via RepoIndexTracker.
+func (c *Client) IndexRepoAsync(projectID, repoID, repoDir string) {
+	go c.indexRepoBackground(projectID, repoID, repoDir)
+}
+
+func (c *Client) indexRepoBackground(projectID, repoID, repoDir string) {
+	ctx := context.Background()
+	colName := repoCollectionName(projectID, repoID)
+
+	RepoIndexTracker.Set(RepoIndexProgress{
+		ProjectID: projectID,
+		RepoID:    repoID,
+		State:     "indexing",
+		Message:   "Scanning files...",
+	})
+
+	// Walk and chunk the repo
+	var totalFiles int
+	chunks, err := WalkAndChunkRepo(repoDir, func(filePath string) {
+		totalFiles++
+		RepoIndexTracker.Set(RepoIndexProgress{
+			ProjectID:  projectID,
+			RepoID:     repoID,
+			State:      "indexing",
+			Message:    fmt.Sprintf("Reading %s", filePath),
+			TotalFiles: totalFiles,
+		})
+	})
+	if err != nil {
+		RepoIndexTracker.Set(RepoIndexProgress{
+			ProjectID: projectID,
+			RepoID:    repoID,
+			State:     "error",
+			Message:   fmt.Sprintf("Walk failed: %v", err),
+		})
+		return
+	}
+
+	if len(chunks) == 0 {
+		RepoIndexTracker.Set(RepoIndexProgress{
+			ProjectID: projectID,
+			RepoID:    repoID,
+			State:     "error",
+			Message:   "No indexable source files found",
+		})
+		return
+	}
+
+	RepoIndexTracker.Set(RepoIndexProgress{
+		ProjectID:   projectID,
+		RepoID:      repoID,
+		State:       "indexing",
+		Message:     fmt.Sprintf("Embedding %d chunks from %d files...", len(chunks), totalFiles),
+		TotalFiles:  totalFiles,
+		TotalChunks: len(chunks),
+	})
+
+	// Delete old collection if it exists (re-index)
+	_ = c.db.DeleteCollection(colName)
+
+	col, err := c.db.GetOrCreateCollection(colName, nil, c.embed)
+	if err != nil {
+		RepoIndexTracker.Set(RepoIndexProgress{
+			ProjectID: projectID,
+			RepoID:    repoID,
+			State:     "error",
+			Message:   fmt.Sprintf("Collection create failed: %v", err),
+		})
+		return
+	}
+
+	// Embed in batches
+	batchSize := 20
+	done := 0
+	for i := 0; i < len(chunks); i += batchSize {
+		end := i + batchSize
+		if end > len(chunks) {
+			end = len(chunks)
+		}
+		batch := chunks[i:end]
+
+		docs := make([]chromem.Document, len(batch))
+		for j, chunk := range batch {
+			docs[j] = chromem.Document{
+				ID:      fmt.Sprintf("%s_%d", repoID, i+j),
+				Content: chunk.Content,
+				Metadata: map[string]string{
+					"repo_id":   repoID,
+					"file_path": chunk.FilePath,
+				},
+			}
+		}
+
+		if err := col.AddDocuments(ctx, docs, runtime.NumCPU()); err != nil {
+			RepoIndexTracker.Set(RepoIndexProgress{
+				ProjectID: projectID,
+				RepoID:    repoID,
+				State:     "error",
+				Message:   fmt.Sprintf("Embedding failed at chunk %d: %v", done, err),
+			})
+			return
+		}
+
+		done += len(batch)
+		pct := done * 100 / len(chunks)
+		RepoIndexTracker.Set(RepoIndexProgress{
+			ProjectID:   projectID,
+			RepoID:      repoID,
+			State:       "indexing",
+			Message:     fmt.Sprintf("Embedding... %d/%d chunks", done, len(chunks)),
+			TotalFiles:  totalFiles,
+			TotalChunks: len(chunks),
+			DoneChunks:  done,
+			Percent:     pct,
+		})
+	}
+
+	// Persist
+	c.mu.Lock()
+	_ = c.persist()
+	c.mu.Unlock()
+
+	// Save metadata entry
+	metaKey := repoMetaKey(projectID, repoID)
+	c.meta.mu.Lock()
+	// Remove old repo meta entries
+	kept := c.meta.docs[:0]
+	for _, e := range c.meta.docs {
+		if e.DocID != metaKey {
+			kept = append(kept, e)
+		}
+	}
+	c.meta.docs = append(kept, metaEntry{
+		ProjectID:  projectID,
+		DocID:      metaKey,
+		Name:       fmt.Sprintf("repo-index:%s", repoID),
+		SourceFile: repoDir,
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+		Status:     "approved",
+		Verified:   true,
+		SourceType: "code",
+	})
+	c.meta.mu.Unlock()
+	_ = c.meta.save()
+
+	RepoIndexTracker.Set(RepoIndexProgress{
+		ProjectID:   projectID,
+		RepoID:      repoID,
+		State:       "indexed",
+		Message:     fmt.Sprintf("Done! %d chunks from %d files", len(chunks), totalFiles),
+		TotalFiles:  totalFiles,
+		TotalChunks: len(chunks),
+		DoneChunks:  len(chunks),
+		Percent:     100,
+	})
+}
+
+// DeleteRepoIndex removes all indexed code for a repo.
+func (c *Client) DeleteRepoIndex(ctx context.Context, projectID, repoID string) error {
+	colName := repoCollectionName(projectID, repoID)
+	_ = c.db.DeleteCollection(colName)
+
+	c.mu.Lock()
+	_ = c.persist()
+	c.mu.Unlock()
+
+	metaKey := repoMetaKey(projectID, repoID)
+	c.meta.mu.Lock()
+	kept := c.meta.docs[:0]
+	for _, e := range c.meta.docs {
+		if e.DocID != metaKey {
+			kept = append(kept, e)
+		}
+	}
+	c.meta.docs = kept
+	c.meta.mu.Unlock()
+
+	return c.meta.save()
+}
+
+// RetrieveCode retrieves the top-K most relevant code chunks across the given repos.
+// If repoIDs is empty, all indexed repos for the project are searched.
+func (c *Client) RetrieveCode(ctx context.Context, projectID string, repoIDs []string, query string, topK int) ([]CodeChunk, error) {
+	fmt.Println("RetrieveCode for repos:", repoIDs)
+	if topK <= 0 {
+		topK = 20
+	}
+
+	// Determine which repos to search
+	searchRepoIDs := repoIDs
+	if len(searchRepoIDs) == 0 {
+		searchRepoIDs = c.indexedRepoIDs(projectID)
+	}
+
+	var allResults []CodeChunk
+	perRepo := topK
+	if len(searchRepoIDs) > 1 {
+		perRepo = topK / len(searchRepoIDs)
+		if perRepo < 5 {
+			perRepo = 5
+		}
+	}
+
+	for _, rid := range searchRepoIDs {
+		colName := repoCollectionName(projectID, rid)
+		col := c.db.GetCollection(colName, c.embed)
+		if col == nil || col.Count() == 0 {
+			continue
+		}
+
+		results, err := col.Query(ctx, query, perRepo, nil, nil)
+		if err != nil {
+			continue
+		}
+
+		for _, r := range results {
+			cc := CodeChunk{
+				Content: r.Content,
+				Score:   float64(r.Similarity),
+			}
+			if r.Metadata != nil {
+				cc.FilePath = r.Metadata["file_path"]
+			}
+			allResults = append(allResults, cc)
+		}
+	}
+
+	fmt.Println("All results:", allResults)
+
+	// Sort by score descending and limit to topK
+	sortCodeChunks(allResults)
+	if len(allResults) > topK {
+		allResults = allResults[:topK]
+	}
+
+	return allResults, nil
+}
+
+// GetRepoIndexStatus returns the indexing status for a specific repo.
+func (c *Client) GetRepoIndexStatus(projectID, repoID string) RepoIndexStatus {
+	// Check if currently indexing
+	prog := RepoIndexTracker.Get()
+	if prog.ProjectID == projectID && prog.RepoID == repoID && prog.State == "indexing" {
+		return RepoIndexStatus{
+			State:      "indexing",
+			TotalFiles: prog.TotalFiles,
+			Percent:    prog.Percent,
+			Message:    prog.Message,
+		}
+	}
+
+	// Check if indexed (has meta entry)
+	metaKey := repoMetaKey(projectID, repoID)
+	c.meta.mu.RLock()
+	defer c.meta.mu.RUnlock()
+	for _, e := range c.meta.docs {
+		if e.DocID == metaKey {
+			colName := repoCollectionName(projectID, repoID)
+			col := c.db.GetCollection(colName, c.embed)
+			chunks := 0
+			if col != nil {
+				chunks = col.Count()
+			}
+			return RepoIndexStatus{
+				State:     "indexed",
+				DoneFiles: chunks,
+				Percent:   100,
+				IndexedAt: e.CreatedAt,
+				Message:   fmt.Sprintf("%d chunks indexed", chunks),
+			}
+		}
+	}
+
+	return RepoIndexStatus{State: "none"}
+}
+
+// indexedRepoIDs returns the repo IDs that have been indexed for a project.
+func (c *Client) indexedRepoIDs(projectID string) []string {
+	prefix := "repo:" + projectID + ":"
+	c.meta.mu.RLock()
+	defer c.meta.mu.RUnlock()
+	var ids []string
+	for _, e := range c.meta.docs {
+		if strings.HasPrefix(e.DocID, prefix) && e.SourceType == "code" {
+			rid := strings.TrimPrefix(e.DocID, prefix)
+			ids = append(ids, rid)
+		}
+	}
+	return ids
+}
+
+// HasRepoIndex returns true if the repo has been indexed.
+func (c *Client) HasRepoIndex(projectID, repoID string) bool {
+	metaKey := repoMetaKey(projectID, repoID)
+	c.meta.mu.RLock()
+	defer c.meta.mu.RUnlock()
+	for _, e := range c.meta.docs {
+		if e.DocID == metaKey {
+			return true
+		}
+	}
+	return false
+}
+
+// sortCodeChunks sorts by score descending.
+func sortCodeChunks(chunks []CodeChunk) {
+	for i := 1; i < len(chunks); i++ {
+		for j := i; j > 0 && chunks[j].Score > chunks[j-1].Score; j-- {
+			chunks[j], chunks[j-1] = chunks[j-1], chunks[j]
+		}
+	}
+}
+
 func (ms *metaStore) save() error {
 	ms.mu.RLock()
 	data, err := json.MarshalIndent(ms.docs, "", "  ")

@@ -2,13 +2,13 @@ import type {
   Config,
   AuthStatus,
   ClarifyResponse,
-  RefineResponse,
   ToolEvent,
   FeatureManifest,
   KnowledgeDocument,
   KnowledgeUploadResponse,
   LocalProject,
   ProjectRepository,
+  RepoIndexStatus,
   WikiChatRequest,
   WikiChatResponse,
   EmbeddingStatus,
@@ -67,6 +67,16 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ branch }),
       }),
+    indexRepo: (id: string, repoId: string) =>
+      request<{ status: string }>(`/projects/${id}/repos/${repoId}/index`, {
+        method: "POST",
+      }),
+    indexRepoStatus: (id: string, repoId: string) =>
+      request<RepoIndexStatus>(`/projects/${id}/repos/${repoId}/index-status`),
+    deleteRepoIndex: (id: string, repoId: string) =>
+      request<{ ok: boolean }>(`/projects/${id}/repos/${repoId}/index`, {
+        method: "DELETE",
+      }),
   },
   clarify: (payload: {
     spec: string;
@@ -79,69 +89,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  clarifyStream: async (
+  clarifyChat: async (
     payload: {
-      spec: string;
-      mode: string;
-      wikiContent?: string;
+      sessionId: string;
+      message: string;
       projectId?: string;
       repoIds?: string[];
+      model?: string;
     },
-    onTool: (event: ToolEvent) => void,
-    signal?: AbortSignal,
-  ): Promise<ClarifyResponse> => {
-    const res = await fetch(`${BASE}${SPEC_CLARIFY}/clarify`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
-      },
-      body: JSON.stringify(payload),
-      signal,
-    });
-    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-
-      // Parse complete SSE messages (delimited by \n\n)
-      let boundary: number;
-      while ((boundary = buf.indexOf("\n\n")) !== -1) {
-        const block = buf.slice(0, boundary);
-        buf = buf.slice(boundary + 2);
-
-        let eventType = "message";
-        let dataLine = "";
-        for (const line of block.split("\n")) {
-          if (line.startsWith("event:")) eventType = line.slice(6).trim();
-          else if (line.startsWith("data:")) dataLine = line.slice(5).trim();
-        }
-        if (!dataLine) continue;
-
-        if (eventType === "tool") {
-          onTool(JSON.parse(dataLine) as ToolEvent);
-        } else if (eventType === "result") {
-          return JSON.parse(dataLine) as ClarifyResponse;
-        } else if (eventType === "error") {
-          throw new Error((JSON.parse(dataLine) as { error: string }).error);
-        }
-      }
-    }
-    throw new Error("Stream ended without result");
-  },
-  refineSpec: (payload: { spec: string; issues: ClarifyResponse["issues"]; model?: string }) =>
-    request<RefineResponse>(`${SPEC_CLARIFY}/refine`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-  clarifyChat: async (
-    payload: { sessionId: string; message: string; projectId?: string; repoIds?: string[]; model?: string },
     onTool: (event: ToolEvent) => void,
   ): Promise<string> => {
     const res = await fetch(`${BASE}${SPEC_CLARIFY}/chat`, {

@@ -1,0 +1,258 @@
+package knowledge
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/tmc/langchaingo/textsplitter"
+)
+
+// CodeChunk represents a chunk of source code with file metadata.
+type CodeChunk struct {
+	Content  string  `json:"content"`
+	FilePath string  `json:"filePath"`
+	Score    float64 `json:"score,omitempty"`
+}
+
+// codeChunkSize and overlap tuned for source code.
+const (
+	codeChunkSize    = 1000
+	codeChunkOverlap = 150
+)
+
+// supportedCodeExts lists file extensions to index.
+var supportedCodeExts = map[string]bool{
+	".go": true, ".js": true, ".ts": true, ".jsx": true, ".tsx": true,
+	".py": true, ".java": true, ".kt": true, ".kts": true,
+	".rb": true, ".rs": true, ".c": true, ".cpp": true, ".h": true, ".hpp": true,
+	".cs": true, ".swift": true, ".scala": true, ".php": true,
+	".vue": true, ".svelte": true,
+	".sql": true, ".graphql": true, ".gql": true,
+	".yaml": true, ".yml": true, ".toml": true,
+	".sh": true, ".bash": true, ".zsh": true,
+	".md": true, ".markdown": true,
+	".json": true, ".proto": true,
+	".dart": true, ".ex": true, ".exs": true,
+	".lua": true, ".r": true, ".R": true,
+	".tf": true, ".hcl": true,
+	".dockerfile": true,
+}
+
+// skipCodeDirs lists directories to exclude from code indexing.
+var skipCodeDirs = map[string]bool{
+	".git": true, "node_modules": true, "vendor": true, ".cache": true,
+	"dist": true, "build": true, "__pycache__": true, ".idea": true,
+	".vscode": true, "target": true, "out": true, ".next": true, ".nuxt": true,
+	"coverage": true, ".tox": true, ".mypy_cache": true, ".pytest_cache": true,
+	"venv": true, ".venv": true, "env": true, ".env": true,
+	".terraform": true, ".gradle": true, "bin": true, "obj": true,
+	"pods": true, "Pods": true, ".svn": true, ".hg": true,
+}
+
+// maxFileSize limits individual files to 512KB to avoid embedding huge generated files.
+const maxFileSize = 512 * 1024
+
+// WalkAndChunkRepo walks a repo directory and returns code chunks with metadata.
+func WalkAndChunkRepo(repoDir string, onProgress func(filePath string)) ([]CodeChunk, error) {
+	repoDir = filepath.Clean(repoDir)
+	var allChunks []CodeChunk
+
+	err := filepath.WalkDir(repoDir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip errors
+		}
+		if d.IsDir() {
+			if skipCodeDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		// Handle Dockerfile (no extension)
+		if ext == "" && strings.EqualFold(d.Name(), "Dockerfile") {
+			ext = ".dockerfile"
+		}
+		if !supportedCodeExts[ext] {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil || info.Size() > maxFileSize || info.Size() == 0 {
+			return nil
+		}
+
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+
+		relPath, _ := filepath.Rel(repoDir, p)
+		if onProgress != nil {
+			onProgress(relPath)
+		}
+
+		chunks := chunkCodeFile(string(data), relPath, ext)
+		allChunks = append(allChunks, chunks...)
+		return nil
+	})
+
+	return allChunks, err
+}
+
+// chunkCodeFile splits a single source file into chunks using langchaingo's
+// RecursiveCharacter splitter with language-aware separators.
+func chunkCodeFile(content, filePath, ext string) []CodeChunk {
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+
+	header := fmt.Sprintf("// File: %s\n", filePath)
+
+	// For small files, use a single chunk
+	if len(content) <= codeChunkSize {
+		return []CodeChunk{{
+			Content:  header + content,
+			FilePath: filePath,
+		}}
+	}
+
+	seps := separatorsForExt(ext)
+	splitter := textsplitter.NewRecursiveCharacter(
+		textsplitter.WithSeparators(seps),
+		textsplitter.WithChunkSize(codeChunkSize),
+		textsplitter.WithChunkOverlap(codeChunkOverlap),
+	)
+
+	parts, err := splitter.SplitText(content)
+	if err != nil || len(parts) == 0 {
+		// Fallback: single chunk (truncated)
+		return []CodeChunk{{
+			Content:  header + content,
+			FilePath: filePath,
+		}}
+	}
+
+	chunks := make([]CodeChunk, 0, len(parts))
+	for _, part := range parts {
+		chunks = append(chunks, CodeChunk{
+			Content:  header + part,
+			FilePath: filePath,
+		})
+	}
+	return chunks
+}
+
+// separatorsForExt returns language-aware separators for the RecursiveCharacter splitter.
+// Mirrors the approach from LangChain's Language-based code splitter.
+func separatorsForExt(ext string) []string {
+	switch ext {
+	case ".go":
+		return []string{
+			"\nfunc ", "\ntype ", "\nvar ", "\nconst ",
+			"\n// ", "\n\n", "\n", " ", "",
+		}
+	case ".py":
+		return []string{
+			"\nclass ", "\ndef ", "\n\tdef ", "\n    def ",
+			"\n# ", "\nif ", "\n\n", "\n", " ", "",
+		}
+	case ".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte":
+		return []string{
+			"\nfunction ", "\nconst ", "\nlet ", "\nvar ",
+			"\nclass ", "\nexport ", "\nimport ",
+			"\nif ", "\nfor ", "\nwhile ",
+			"\n// ", "\n\n", "\n", " ", "",
+		}
+	case ".java", ".kt", ".kts", ".scala":
+		return []string{
+			"\npublic ", "\nprivate ", "\nprotected ",
+			"\nclass ", "\ninterface ", "\nenum ",
+			"\n\t@", "\n    @",
+			"\n// ", "\n\n", "\n", " ", "",
+		}
+	case ".rs":
+		return []string{
+			"\nfn ", "\npub fn ", "\nimpl ", "\nstruct ", "\nenum ",
+			"\nmod ", "\ntrait ", "\nuse ",
+			"\n// ", "\n\n", "\n", " ", "",
+		}
+	case ".rb":
+		return []string{
+			"\ndef ", "\nclass ", "\nmodule ",
+			"\n# ", "\nif ", "\nunless ",
+			"\n\n", "\n", " ", "",
+		}
+	case ".c", ".cpp", ".h", ".hpp":
+		return []string{
+			"\nvoid ", "\nint ", "\nchar ", "\nfloat ", "\ndouble ",
+			"\nclass ", "\nstruct ", "\nenum ", "\nnamespace ",
+			"\n#include ", "\n#define ",
+			"\n// ", "\n\n", "\n", " ", "",
+		}
+	case ".cs":
+		return []string{
+			"\npublic ", "\nprivate ", "\nprotected ", "\ninternal ",
+			"\nclass ", "\ninterface ", "\nenum ", "\nstruct ",
+			"\nnamespace ", "\nusing ",
+			"\n// ", "\n\n", "\n", " ", "",
+		}
+	case ".swift":
+		return []string{
+			"\nfunc ", "\nclass ", "\nstruct ", "\nenum ", "\nprotocol ",
+			"\nimport ", "\nextension ",
+			"\n// ", "\n\n", "\n", " ", "",
+		}
+	case ".php":
+		return []string{
+			"\nfunction ", "\nclass ", "\ninterface ", "\ntrait ",
+			"\npublic ", "\nprivate ", "\nprotected ",
+			"\nnamespace ", "\nuse ",
+			"\n// ", "\n\n", "\n", " ", "",
+		}
+	case ".sql":
+		return []string{
+			"\nCREATE ", "\nALTER ", "\nDROP ",
+			"\nSELECT ", "\nINSERT ", "\nUPDATE ", "\nDELETE ",
+			"\nWHERE ", "\nJOIN ", "\nFROM ",
+			"\n-- ", "\n\n", "\n", " ", "",
+		}
+	case ".md", ".markdown":
+		return []string{
+			"\n## ", "\n### ", "\n#### ",
+			"\n- ", "\n* ", "\n1. ",
+			"\n```", "\n\n", "\n", " ", "",
+		}
+	case ".sh", ".bash", ".zsh":
+		return []string{
+			"\nfunction ", "\n# ",
+			"\nif ", "\nfor ", "\nwhile ", "\ncase ",
+			"\n\n", "\n", " ", "",
+		}
+	case ".proto":
+		return []string{
+			"\nmessage ", "\nservice ", "\nenum ", "\nrpc ",
+			"\n// ", "\n\n", "\n", " ", "",
+		}
+	case ".ex", ".exs":
+		return []string{
+			"\ndef ", "\ndefp ", "\ndefmodule ", "\ndefmacro ",
+			"\n# ", "\n\n", "\n", " ", "",
+		}
+	case ".dart":
+		return []string{
+			"\nclass ", "\nvoid ", "\nFuture ",
+			"\n// ", "\n\n", "\n", " ", "",
+		}
+	case ".lua":
+		return []string{
+			"\nfunction ", "\nlocal function ",
+			"\n-- ", "\n\n", "\n", " ", "",
+		}
+	default:
+		// Generic fallback
+		return []string{"\n\n", "\n", " ", ""}
+	}
+}

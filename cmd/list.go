@@ -13,7 +13,6 @@ func newListCommand() *cobra.Command {
 		Use:   "list",
 		Short: "List all installed features",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("Built-in features:")
 			builtins := []hub.Feature{
 				specclarify.New(),
 			}
@@ -24,8 +23,6 @@ func newListCommand() *cobra.Command {
 
 			reg, err := hub.LoadPluginRegistry()
 			if err != nil || len(reg.Plugins) == 0 {
-				fmt.Println("\nExternal features: (none installed)")
-				fmt.Println("\nInstall with: copilothub install github.com/user/plugin-name")
 				return nil
 			}
 			fmt.Printf("\nExternal features (%d installed):\n", len(reg.Plugins))

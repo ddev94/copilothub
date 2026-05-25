@@ -66,6 +66,15 @@ export interface ProjectRepository {
   repoCloned: boolean;
 }
 
+export interface RepoIndexStatus {
+  state: "none" | "indexing" | "indexed" | "error";
+  message?: string;
+  totalFiles?: number;
+  doneFiles?: number;
+  percent?: number;
+  indexedAt?: string;
+}
+
 export interface LocalProject {
   id: string;
   name: string;
@@ -165,10 +174,6 @@ export interface ClarifyResponse {
   summary: string;
   issues: ClarifyIssue[];
   sessionId?: string;
-}
-
-export interface RefineResponse {
-  refinedSpec: string;
 }
 
 export interface FeatureManifest {

@@ -130,3 +130,62 @@ func (b *IngestBroadcaster) Unsubscribe(ch chan IngestProgress) {
 	b.mu.Unlock()
 	close(ch)
 }
+
+// ── Repo code index progress ────────────────────────────────────────
+
+// RepoIndexProgress tracks the progress of a repo code indexing operation.
+type RepoIndexProgress struct {
+	ProjectID   string `json:"projectId"`
+	RepoID      string `json:"repoId"`
+	State       string `json:"state"` // "indexing" | "indexed" | "error"
+	Message     string `json:"message"`
+	TotalFiles  int    `json:"totalFiles"`
+	TotalChunks int    `json:"totalChunks"`
+	DoneChunks  int    `json:"doneChunks"`
+	Percent     int    `json:"percent"`
+}
+
+// RepoIndexBroadcaster fans out repo indexing progress to SSE subscribers.
+type RepoIndexBroadcaster struct {
+	mu   sync.RWMutex
+	cur  RepoIndexProgress
+	subs map[chan RepoIndexProgress]struct{}
+}
+
+// RepoIndexTracker is the global repo index progress tracker.
+var RepoIndexTracker = &RepoIndexBroadcaster{
+	subs: make(map[chan RepoIndexProgress]struct{}),
+}
+
+func (b *RepoIndexBroadcaster) Set(p RepoIndexProgress) {
+	b.mu.Lock()
+	b.cur = p
+	for ch := range b.subs {
+		select {
+		case ch <- p:
+		default:
+		}
+	}
+	b.mu.Unlock()
+}
+
+func (b *RepoIndexBroadcaster) Get() RepoIndexProgress {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.cur
+}
+
+func (b *RepoIndexBroadcaster) Subscribe() chan RepoIndexProgress {
+	ch := make(chan RepoIndexProgress, 8)
+	b.mu.Lock()
+	b.subs[ch] = struct{}{}
+	b.mu.Unlock()
+	return ch
+}
+
+func (b *RepoIndexBroadcaster) Unsubscribe(ch chan RepoIndexProgress) {
+	b.mu.Lock()
+	delete(b.subs, ch)
+	b.mu.Unlock()
+	close(ch)
+}

@@ -19,9 +19,6 @@ func setupRoutes(mux *http.ServeMux, dataDir string) {
 	cfg, _ := cfgStore.Load()
 	projStore := project.NewStore(dataDir)
 
-	fmt.Printf("Using AI provider: %s, model: %s\n", cfg.AI.Provider, cfg.AI.Model)
-	fmt.Printf("Data directory: %s\n", dataDir)
-
 	aiProvider := ai.NewProvider(cfg.AI.Provider, cfg.AI.Token, cfg.AI.Model, cfg.AI.BaseURL, dataDir)
 
 	// Build registry with built-in features
@@ -46,7 +43,7 @@ func setupRoutes(mux *http.ServeMux, dataDir string) {
 	// Hub-level routes
 	hubH := handler.NewHubHandler(registry)
 	cfgH := handler.NewConfigHandler(dataDir)
-	projH := handler.NewProjectHandler(projStore)
+	projH := handler.NewProjectHandler(projStore, cfgStore, dataDir)
 
 	mux.HandleFunc("GET /api/hub/features", hubH.ListFeatures)
 	mux.HandleFunc("GET /api/config", cfgH.Get)
@@ -62,6 +59,11 @@ func setupRoutes(mux *http.ServeMux, dataDir string) {
 	mux.HandleFunc("POST /api/projects/{id}/repos", projH.AddRepo)
 	mux.HandleFunc("DELETE /api/projects/{id}/repos/{repoId}", projH.RemoveRepo)
 	mux.HandleFunc("POST /api/projects/{id}/repos/{repoId}/change-branch", projH.ChangeRepoBranch)
+	// Deep repo indexing
+	mux.HandleFunc("POST /api/projects/{id}/repos/{repoId}/index", projH.IndexRepo)
+	mux.HandleFunc("GET /api/projects/{id}/repos/{repoId}/index-status", projH.IndexRepoStatus)
+	mux.HandleFunc("DELETE /api/projects/{id}/repos/{repoId}/index", projH.DeleteRepoIndex)
+	mux.HandleFunc("GET /api/projects/{id}/index-stream", projH.IndexRepoStream)
 	// Legacy single-repo endpoints kept for backward compatibility
 	mux.HandleFunc("POST /api/projects/{id}/connect-repo", projH.ConnectRepo)
 	mux.HandleFunc("POST /api/projects/{id}/disconnect-repo", projH.DisconnectRepo)

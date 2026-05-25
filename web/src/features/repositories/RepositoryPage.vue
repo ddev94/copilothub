@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, computed, reactive } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useProjectStore } from "@/stores/repo";
 import { api } from "@/api";
-import type { ProjectRepository } from "@/types";
+import type { ProjectRepository, RepoIndexStatus } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,6 +37,7 @@ onMounted(async () => {
   if (projectId.value) {
     projectStore.selectProject(projectId.value);
   }
+  await loadIndexStatuses();
 });
 
 async function addRepo() {
@@ -104,15 +105,76 @@ async function removeRepo(repoId: string) {
 function repoDisplayName(repo: ProjectRepository) {
   return (
     repo.name ||
-    repo.repoURL
-      .replace(/^https?:\/\/github\.com\//, "")
-      .replace(/\.git$/, "")
+    repo.repoURL.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "")
   );
+}
+
+// ── Code index ──
+const indexStatus = reactive<Record<string, RepoIndexStatus>>({});
+const indexingRepoId = ref<string | null>(null);
+
+async function loadIndexStatuses() {
+  if (!project.value?.repositories) return;
+  for (const repo of project.value.repositories) {
+    if (!repo.repoCloned) continue;
+    try {
+      indexStatus[repo.id] = await api.projects.indexRepoStatus(
+        projectId.value,
+        repo.id,
+      );
+    } catch {
+      indexStatus[repo.id] = { state: "none" };
+    }
+  }
+}
+
+async function startIndex(repoId: string) {
+  indexingRepoId.value = repoId;
+  try {
+    await api.projects.indexRepo(projectId.value, repoId);
+    indexStatus[repoId] = {
+      state: "indexing",
+      percent: 0,
+      message: "Starting…",
+    };
+    // Poll for status
+    pollIndexStatus(repoId);
+  } catch (e) {
+    repoError.value =
+      e instanceof Error ? e.message : "Failed to start indexing";
+  } finally {
+    indexingRepoId.value = null;
+  }
+}
+
+function pollIndexStatus(repoId: string) {
+  const interval = setInterval(async () => {
+    try {
+      const s = await api.projects.indexRepoStatus(projectId.value, repoId);
+      indexStatus[repoId] = s;
+      if (s.state === "indexed" || s.state === "error" || s.state === "none") {
+        clearInterval(interval);
+      }
+    } catch {
+      clearInterval(interval);
+    }
+  }, 2000);
+}
+
+async function deleteIndex(repoId: string) {
+  try {
+    await api.projects.deleteRepoIndex(projectId.value, repoId);
+    indexStatus[repoId] = { state: "none" };
+  } catch (e) {
+    repoError.value = e instanceof Error ? e.message : "Failed to delete index";
+  }
 }
 </script>
 
 <template>
-  <div class="flex flex-col h-screen bg-background text-foreground overflow-hidden">
+  <div
+    class="flex flex-col h-screen bg-background text-foreground overflow-hidden"
+  >
     <header
       class="h-11 border-b border-border flex items-center justify-between px-4 shrink-0 bg-background z-10"
     >
@@ -183,7 +245,9 @@ function repoDisplayName(repo: ProjectRepository) {
                     <p class="text-sm font-medium truncate">
                       {{ repoDisplayName(repo) }}
                     </p>
-                    <p class="text-xs text-muted-foreground font-mono truncate mt-0.5">
+                    <p
+                      class="text-xs text-muted-foreground font-mono truncate mt-0.5"
+                    >
                       {{ repo.repoURL }}
                     </p>
                   </div>
@@ -194,14 +258,19 @@ function repoDisplayName(repo: ProjectRepository) {
                     :disabled="removingRepoId === repo.id"
                     @click="removeRepo(repo.id)"
                   >
-                    {{ removingRepoId === repo.id ? "Removing…" : "Disconnect" }}
+                    {{
+                      removingRepoId === repo.id ? "Removing…" : "Disconnect"
+                    }}
                   </Button>
                 </div>
 
                 <!-- Branch -->
                 <div class="pl-6 space-y-1.5">
                   <Label class="text-xs text-muted-foreground">Branch</Label>
-                  <div v-if="editingBranchFor === repo.id" class="flex items-center gap-2">
+                  <div
+                    v-if="editingBranchFor === repo.id"
+                    class="flex items-center gap-2"
+                  >
                     <Input
                       v-model="editBranchValue"
                       placeholder="main"
@@ -242,6 +311,82 @@ function repoDisplayName(repo: ProjectRepository) {
                     </button>
                   </div>
                 </div>
+
+                <!-- Code Index -->
+                <div v-if="repo.repoCloned" class="pl-6 space-y-1.5">
+                  <Label class="text-xs text-muted-foreground"
+                    >Code Index</Label
+                  >
+                  <div
+                    class="flex items-center gap-2 h-8 px-3 rounded-md border border-border bg-background"
+                  >
+                    <template v-if="indexStatus[repo.id]?.state === 'indexed'">
+                      <span class="text-green-500 text-xs">●</span>
+                      <span class="text-sm flex-1"
+                        >Indexed ({{
+                          indexStatus[repo.id]?.doneFiles ?? 0
+                        }}
+                        chunks)</span
+                      >
+                      <button
+                        class="text-xs text-destructive hover:underline shrink-0"
+                        @click="deleteIndex(repo.id)"
+                      >
+                        Delete
+                      </button>
+                      <button
+                        class="text-xs text-primary hover:underline shrink-0"
+                        @click="startIndex(repo.id)"
+                      >
+                        Re-index
+                      </button>
+                    </template>
+                    <template
+                      v-else-if="indexStatus[repo.id]?.state === 'indexing'"
+                    >
+                      <span class="text-yellow-500 text-xs animate-pulse"
+                        >●</span
+                      >
+                      <span class="text-sm flex-1"
+                        >Indexing…
+                        {{ indexStatus[repo.id]?.percent ?? 0 }}%</span
+                      >
+                    </template>
+                    <template
+                      v-else-if="indexStatus[repo.id]?.state === 'error'"
+                    >
+                      <span class="text-red-500 text-xs">●</span>
+                      <span class="text-sm flex-1 text-destructive truncate">{{
+                        indexStatus[repo.id]?.message || "Error"
+                      }}</span>
+                      <button
+                        class="text-xs text-primary hover:underline shrink-0"
+                        @click="startIndex(repo.id)"
+                      >
+                        Retry
+                      </button>
+                    </template>
+                    <template v-else>
+                      <span class="text-muted-foreground text-xs">●</span>
+                      <span class="text-sm flex-1 text-muted-foreground"
+                        >Not indexed</span
+                      >
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        class="shrink-0 h-6 text-xs"
+                        :disabled="indexingRepoId === repo.id"
+                        @click="startIndex(repo.id)"
+                      >
+                        {{
+                          indexingRepoId === repo.id
+                            ? "Starting…"
+                            : "Index Code"
+                        }}
+                      </Button>
+                    </template>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -269,7 +414,9 @@ function repoDisplayName(repo: ProjectRepository) {
                 <div class="space-y-1.5">
                   <Label>
                     Branch
-                    <span class="text-muted-foreground text-xs">(optional)</span>
+                    <span class="text-muted-foreground text-xs"
+                      >(optional)</span
+                    >
                   </Label>
                   <Input
                     v-model="newBranch"
@@ -280,7 +427,9 @@ function repoDisplayName(repo: ProjectRepository) {
                 <div class="space-y-1.5">
                   <Label>
                     Display Name
-                    <span class="text-muted-foreground text-xs">(optional)</span>
+                    <span class="text-muted-foreground text-xs"
+                      >(optional)</span
+                    >
                   </Label>
                   <Input
                     v-model="newRepoName"
@@ -297,7 +446,10 @@ function repoDisplayName(repo: ProjectRepository) {
                   variant="ghost"
                   size="sm"
                   :disabled="adding"
-                  @click="showAddForm = false; addError = null"
+                  @click="
+                    showAddForm = false;
+                    addError = null;
+                  "
                 >
                   Cancel
                 </Button>

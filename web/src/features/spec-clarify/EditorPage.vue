@@ -8,7 +8,7 @@ import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { ClarifyResponse, ToolEvent } from "@/types";
+import type { ClarifyResponse } from "@/types";
 import { marked } from "marked";
 
 function renderMd(text: string): string {
@@ -74,7 +74,6 @@ const wikiError = ref("");
 const loading = ref(false);
 const error = ref("");
 const result = ref<ClarifyResponse | null>(null);
-const toolEvents = ref<ToolEvent[]>([]);
 
 // ── Chat state ───────────────────────────────────────────────────────
 const sessionId = ref<string | null>(null);
@@ -132,7 +131,6 @@ async function runClarify() {
   error.value = "";
   wikiError.value = "";
   result.value = null;
-  toolEvents.value = [];
   sessionId.value = null;
   chatMessages.value = [];
   chatError.value = "";
@@ -161,13 +159,7 @@ async function runClarify() {
       repoIds: effectiveRepoIds.value,
       model: selectedModel.value || undefined,
     };
-    if (clarifyMode.value === "source" || clarifyMode.value === "both") {
-      result.value = await api.clarifyStream(payload, (ev) => {
-        toolEvents.value.push(ev);
-      });
-    } else {
-      result.value = await api.clarify(payload);
-    }
+    result.value = await api.clarify(payload);
     if (result.value?.sessionId) {
       sessionId.value = result.value.sessionId;
     }
@@ -181,36 +173,12 @@ async function runClarify() {
 function clearResults() {
   result.value = null;
   error.value = "";
-  toolEvents.value = [];
   sessionId.value = null;
   chatMessages.value = [];
   chatError.value = "";
 }
 
 // ── UI helpers ───────────────────────────────────────────────────────
-
-function toolEventIcon(kind: string) {
-  switch (kind) {
-    case "read":
-      return "📖";
-    case "write":
-      return "✏️";
-    case "shell":
-      return "⚙️";
-    case "url":
-      return "🌐";
-    case "mcp":
-      return "🔌";
-    default:
-      return "🔧";
-  }
-}
-
-function toolEventLabel(ev: ToolEvent) {
-  if (ev.path) return ev.path;
-  if (ev.name) return ev.name;
-  return ev.kind;
-}
 
 function severityClass(severity: string, category?: string) {
   if (category === "code_wiki_conflict") {
@@ -543,27 +511,6 @@ function categoryLabel(category: string) {
           />
           <p class="text-sm text-muted-foreground">AI đang phân tích spec...</p>
           <p class="text-xs text-muted-foreground">Có thể mất vài phút</p>
-          <!-- Tool activity feed -->
-          <div
-            v-if="toolEvents.length"
-            class="w-full max-w-xs mt-2 space-y-0.5 text-left"
-          >
-            <p
-              class="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1"
-            >
-              Đang đọc codebase
-            </p>
-            <div class="max-h-48 overflow-y-auto space-y-0.5">
-              <div
-                v-for="(ev, idx) in toolEvents"
-                :key="idx"
-                class="flex items-center gap-1.5 text-[11px] text-muted-foreground"
-              >
-                <span class="shrink-0">{{ toolEventIcon(ev.kind) }}</span>
-                <span class="truncate font-mono">{{ toolEventLabel(ev) }}</span>
-              </div>
-            </div>
-          </div>
         </div>
 
         <!-- Error -->

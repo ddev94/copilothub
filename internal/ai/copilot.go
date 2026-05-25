@@ -149,7 +149,7 @@ func (p *SDKProvider) CompleteWithEvents(ctx context.Context, messages []Message
 	cfg := &copilot.SessionConfig{
 		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
 		// AvailableTools:      []string{"read", "shell", "url", "bash"},
-		// Tools:            convertTools(tools, onEvent),
+		Tools:            convertTools(tools, onEvent),
 		WorkingDirectory: p.cwd,
 	}
 	if p.model != "" {
@@ -212,7 +212,6 @@ func (p *SDKProvider) CompleteWithEvents(ctx context.Context, messages []Message
 // CompleteWithSession is like CompleteWithEvents but keeps the session state on disk
 // after returning, allowing resumption via ChatWithSession.
 func (p *SDKProvider) CompleteWithSession(ctx context.Context, messages []Message, tools []Tool, onEvent func(ToolEvent)) (result, sessionID string, err error) {
-	fmt.Println(messages)
 	p.once.Do(p.start)
 	if p.startErr != nil {
 		return "", "", fmt.Errorf("copilot start: %w", p.startErr)
@@ -227,7 +226,6 @@ func (p *SDKProvider) CompleteWithSession(ctx context.Context, messages []Messag
 			user.WriteString(m.Content)
 		}
 	}
-	fmt.Println("Working with:", p.cwd)
 	cfg := &copilot.SessionConfig{
 		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
 		// Tools:               convertTools(tools, onEvent),
@@ -268,11 +266,9 @@ func (p *SDKProvider) CompleteWithSession(ctx context.Context, messages []Messag
 			default:
 			}
 		case *copilot.ToolExecutionStartData:
-			fmt.Println("Tool:", d.ToolName, "Args:", d.Arguments)
 		case *copilot.ToolExecutionCompleteData:
 			err := d.Error
 			if err != nil {
-				fmt.Println(err.Message, err.Code)
 			}
 		}
 	})
