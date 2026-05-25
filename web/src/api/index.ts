@@ -158,6 +158,16 @@ export const api = {
   wiki: {
     projects: () =>
       request<{ projects: LocalProject[] }>("/features/wiki/projects"),
+    ingestProgress: () =>
+      request<{
+        state: "idle" | "running" | "completed" | "failed";
+        docId?: string;
+        fileName?: string;
+        message: string;
+        chunksDone: number;
+        chunksTotal: number;
+        percent: number;
+      }>("/features/wiki/knowledge/ingest-progress"),
     chat: (payload: WikiChatRequest) =>
       request<WikiChatResponse>("/features/wiki/chat", {
         method: "POST",

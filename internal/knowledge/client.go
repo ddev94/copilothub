@@ -28,6 +28,14 @@ type Client struct {
 	embed  chromem.EmbeddingFunc
 	meta   *metaStore
 	mu     sync.Mutex
+	queue  chan ingestJob
+}
+
+type ingestJob struct {
+	projectID string
+	docID     string
+	fileName  string
+	chunks    []string
 }
 
 type metaStore struct {
@@ -95,12 +103,15 @@ func NewClient(storeDir string, embedCfg EmbeddingConfig) (*Client, error) {
 		return nil, fmt.Errorf("embedding model: %w", err)
 	}
 
-	return &Client{
+	client := &Client{
 		db:     db,
 		dbPath: dbPath,
 		embed:  embed,
 		meta:   ms,
-	}, nil
+		queue:  make(chan ingestJob, 64),
+	}
+	go client.ingestWorker()
+	return client, nil
 }
 
 func (c *Client) collection(ctx context.Context, projectID string) (*chromem.Collection, error) {
@@ -123,9 +134,9 @@ func (c *Client) Ingest(ctx context.Context, projectID, filePath, fileName, _ st
 
 	var chunks []string
 	if ext := strings.ToLower(filepath.Ext(fileName)); ext == ".md" || ext == ".markdown" {
-		chunks = splitMarkdown(text, 800, 100)
+		chunks = splitMarkdown(text, defaultChunkSize, defaultChunkOverlap)
 	} else {
-		chunks = splitText(text, 800, 100)
+		chunks = splitText(text, defaultChunkSize, defaultChunkOverlap)
 	}
 	if len(chunks) == 0 {
 		return fmt.Errorf("document produced no chunks: %s", fileName)
@@ -174,6 +185,143 @@ func (c *Client) Ingest(ctx context.Context, projectID, filePath, fileName, _ st
 	c.meta.mu.Unlock()
 
 	return c.meta.save()
+}
+
+// IngestAsync runs ingestion in the background with progress tracking.
+// Returns docID immediately; embedding happens asynchronously.
+func (c *Client) IngestAsync(ctx context.Context, projectID, filePath, fileName, sourceType string) (string, error) {
+	text, err := extractText(filePath, fileName)
+	if err != nil {
+		return "", fmt.Errorf("text extraction: %w", err)
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("no text extracted from %s", fileName)
+	}
+
+	var chunks []string
+	if ext := strings.ToLower(filepath.Ext(fileName)); ext == ".md" || ext == ".markdown" {
+		chunks = splitMarkdown(text, defaultChunkSize, defaultChunkOverlap)
+	} else {
+		chunks = splitText(text, defaultChunkSize, defaultChunkOverlap)
+	}
+	if len(chunks) == 0 {
+		return "", fmt.Errorf("document produced no chunks: %s", fileName)
+	}
+
+	docID := uuid.New().String()
+
+	// Save metadata immediately so the document appears in the list
+	c.meta.mu.Lock()
+	c.meta.docs = append(c.meta.docs, metaEntry{
+		ProjectID:  projectID,
+		DocID:      docID,
+		Name:       fileName,
+		SourceFile: fileName,
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+		Status:     "pending",
+		Verified:   false,
+		Confidence: 0.8,
+		SourceType: sourceType,
+	})
+	c.meta.mu.Unlock()
+	_ = c.meta.save()
+
+	// Enqueue for sequential processing
+	c.queue <- ingestJob{projectID: projectID, docID: docID, fileName: fileName, chunks: chunks}
+
+	return docID, nil
+}
+
+// ingestWorker processes enqueued embedding jobs one at a time to avoid
+// concurrent map access in chromem-go.
+func (c *Client) ingestWorker() {
+	for job := range c.queue {
+		c.ingestBackground(job.projectID, job.docID, job.fileName, job.chunks)
+	}
+}
+
+// ingestBackground embeds chunks in batches and broadcasts progress.
+func (c *Client) ingestBackground(projectID, docID, fileName string, chunks []string) {
+	ctx := context.Background()
+	total := len(chunks)
+
+	IngestProgressTracker.Set(IngestProgress{
+		State:       IngestRunning,
+		DocID:       docID,
+		FileName:    fileName,
+		Message:     fmt.Sprintf("Embedding %d chunks...", total),
+		ChunksTotal: total,
+	})
+
+	col, err := c.collection(ctx, projectID)
+	if err != nil {
+		IngestProgressTracker.Set(IngestProgress{
+			State:   IngestFailed,
+			DocID:   docID,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	// Process in batches of 20 chunks for better progress feedback
+	batchSize := 20
+	done := 0
+
+	for i := 0; i < total; i += batchSize {
+		end := i + batchSize
+		if end > total {
+			end = total
+		}
+		batch := chunks[i:end]
+
+		docs := make([]chromem.Document, len(batch))
+		for j, chunk := range batch {
+			docs[j] = chromem.Document{
+				ID:      fmt.Sprintf("%s_%d", docID, i+j),
+				Content: chunk,
+				Metadata: map[string]string{
+					"doc_id": docID,
+					"source": fileName,
+				},
+			}
+		}
+
+		if err := col.AddDocuments(ctx, docs, runtime.NumCPU()); err != nil {
+			IngestProgressTracker.Set(IngestProgress{
+				State:   IngestFailed,
+				DocID:   docID,
+				Message: fmt.Sprintf("Embedding failed at chunk %d: %v", done, err),
+			})
+			return
+		}
+
+		done += len(batch)
+		pct := done * 100 / total
+		IngestProgressTracker.Set(IngestProgress{
+			State:       IngestRunning,
+			DocID:       docID,
+			FileName:    fileName,
+			Message:     fmt.Sprintf("Embedding... %d/%d chunks", done, total),
+			ChunksDone:  done,
+			ChunksTotal: total,
+			Percent:     pct,
+		})
+	}
+
+	// Persist DB
+	c.mu.Lock()
+	_ = c.persist()
+	c.mu.Unlock()
+
+	IngestProgressTracker.Set(IngestProgress{
+		State:       IngestCompleted,
+		DocID:       docID,
+		FileName:    fileName,
+		Message:     fmt.Sprintf("Done! %d chunks embedded", total),
+		ChunksDone:  total,
+		ChunksTotal: total,
+		Percent:     100,
+	})
 }
 
 // ListDocuments returns metadata for all documents stored under projectID.
@@ -338,6 +486,57 @@ func (c *Client) approvedDocIDSet(projectID string) map[string]bool {
 	for _, e := range c.meta.docs {
 		if e.ProjectID == projectID && e.Status == "approved" && e.Verified {
 			m[e.DocID] = true
+		}
+	}
+	return m
+}
+
+// SyncOrphanFiles scans the given directory for files that exist on disk but
+// have no metadata entry. It re-ingests them asynchronously.
+func (c *Client) SyncOrphanFiles(projectID, filesDir string) int {
+	entries, err := os.ReadDir(filesDir)
+	if err != nil {
+		return 0
+	}
+
+	existing := c.knownFileNames(projectID)
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		ext := strings.ToLower(filepath.Ext(name))
+		if ext != ".pdf" && ext != ".md" && ext != ".docx" {
+			continue
+		}
+		if existing[name] {
+			continue
+		}
+		contentType := "text/plain"
+		switch ext {
+		case ".pdf":
+			contentType = "application/pdf"
+		case ".md":
+			contentType = "text/markdown"
+		case ".docx":
+			contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+		}
+		filePath := filepath.Join(filesDir, name)
+		if _, err := c.IngestAsync(context.Background(), projectID, filePath, name, contentType); err == nil {
+			count++
+		}
+	}
+	return count
+}
+
+func (c *Client) knownFileNames(projectID string) map[string]bool {
+	c.meta.mu.RLock()
+	defer c.meta.mu.RUnlock()
+	m := map[string]bool{}
+	for _, e := range c.meta.docs {
+		if e.ProjectID == projectID {
+			m[e.SourceFile] = true
 		}
 	}
 	return m

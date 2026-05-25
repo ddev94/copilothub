@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	defaultChunkSize    = 800
-	defaultChunkOverlap = 100
+	defaultChunkSize    = 1200
+	defaultChunkOverlap = 150
 )
 
 // splitMarkdown splits Markdown text respecting header boundaries and heading hierarchy.
@@ -27,7 +27,7 @@ func splitMarkdown(text string, chunkSize, overlap int) []string {
 	if err != nil || len(chunks) == 0 {
 		return splitText(text, chunkSize, overlap)
 	}
-	return chunks
+	return truncateChunks(chunks, chunkSize)
 }
 
 // splitText splits plain text (PDF, DOCX, etc.) using recursive character splitting.
@@ -43,6 +43,16 @@ func splitText(text string, chunkSize, overlap int) []string {
 	chunks, err := splitter.SplitText(text)
 	if err != nil {
 		return nil
+	}
+	return truncateChunks(chunks, chunkSize)
+}
+
+// truncateChunks ensures no chunk exceeds maxChars (safety for embedding model token limits).
+func truncateChunks(chunks []string, maxChars int) []string {
+	for i, c := range chunks {
+		if len(c) > maxChars {
+			chunks[i] = c[:maxChars]
+		}
 	}
 	return chunks
 }

@@ -244,11 +244,11 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		dst.Close()
 		file.Close()
 
-		if err := c.Ingest(r.Context(), pid, destPath, header.Filename, contentType); err != nil {
-			results = append(results, uploadResult{File: header.Filename, OK: false, Message: "knowledge ingest failed"})
+		if _, err := c.IngestAsync(r.Context(), pid, destPath, header.Filename, contentType); err != nil {
+			results = append(results, uploadResult{File: header.Filename, OK: false, Message: "knowledge ingest failed: " + err.Error()})
 			continue
 		}
-		results = append(results, uploadResult{File: header.Filename, OK: true})
+		results = append(results, uploadResult{File: header.Filename, OK: true, Message: "embedding in background"})
 	}
 
 	writeJSON(w, map[string]any{"results": results})
@@ -675,4 +675,25 @@ func (h *Handler) GetDocumentContent(w http.ResponseWriter, r *http.Request) {
 		"sourceFile": sourceFile,
 		"isMarkdown": strings.HasSuffix(strings.ToLower(sourceFile), ".md"),
 	})
+}
+
+func (h *Handler) IngestProgress(w http.ResponseWriter, r *http.Request) {
+	progress := knowledge.IngestProgressTracker.Get()
+	writeJSON(w, progress)
+}
+
+func (h *Handler) ResyncOrphans(w http.ResponseWriter, r *http.Request) {
+	c := h.kc.Load()
+	if c == nil {
+		writeError(w, "knowledge store not ready", http.StatusServiceUnavailable)
+		return
+	}
+	pid := r.URL.Query().Get("projectId")
+	if pid == "" {
+		writeError(w, "projectId required", http.StatusBadRequest)
+		return
+	}
+	filesDir := h.projectFilesDir(pid)
+	count := c.SyncOrphanFiles(pid, filesDir)
+	writeJSON(w, map[string]any{"ok": true, "resynced": count})
 }

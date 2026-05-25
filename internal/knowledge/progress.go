@@ -19,6 +19,26 @@ type ModelProgress struct {
 	Percent int        `json:"percent"`
 }
 
+// IngestState tracks the progress of a document ingestion.
+type IngestState string
+
+const (
+	IngestIdle      IngestState = "idle"
+	IngestRunning   IngestState = "running"
+	IngestCompleted IngestState = "completed"
+	IngestFailed    IngestState = "failed"
+)
+
+type IngestProgress struct {
+	State       IngestState `json:"state"`
+	DocID       string      `json:"docId,omitempty"`
+	FileName    string      `json:"fileName,omitempty"`
+	Message     string      `json:"message"`
+	ChunksDone  int         `json:"chunksDone"`
+	ChunksTotal int         `json:"chunksTotal"`
+	Percent     int         `json:"percent"`
+}
+
 // ProgressBroadcaster tracks embedding model download state and fans out to SSE subscribers.
 type ProgressBroadcaster struct {
 	mu   sync.RWMutex
@@ -26,10 +46,23 @@ type ProgressBroadcaster struct {
 	subs map[chan ModelProgress]struct{}
 }
 
+// IngestBroadcaster tracks document ingestion progress.
+type IngestBroadcaster struct {
+	mu   sync.RWMutex
+	cur  IngestProgress
+	subs map[chan IngestProgress]struct{}
+}
+
 // EmbedProgress is the global download progress tracker for the cybertron model.
 var EmbedProgress = &ProgressBroadcaster{
 	cur:  ModelProgress{State: ModelStateUnknown},
 	subs: make(map[chan ModelProgress]struct{}),
+}
+
+// IngestProgressTracker is the global ingestion progress tracker.
+var IngestProgressTracker = &IngestBroadcaster{
+	cur:  IngestProgress{State: IngestIdle},
+	subs: make(map[chan IngestProgress]struct{}),
 }
 
 func (b *ProgressBroadcaster) Set(p ModelProgress) {
@@ -59,6 +92,39 @@ func (b *ProgressBroadcaster) Subscribe() chan ModelProgress {
 }
 
 func (b *ProgressBroadcaster) Unsubscribe(ch chan ModelProgress) {
+	b.mu.Lock()
+	delete(b.subs, ch)
+	b.mu.Unlock()
+	close(ch)
+}
+
+func (b *IngestBroadcaster) Set(p IngestProgress) {
+	b.mu.Lock()
+	b.cur = p
+	for ch := range b.subs {
+		select {
+		case ch <- p:
+		default:
+		}
+	}
+	b.mu.Unlock()
+}
+
+func (b *IngestBroadcaster) Get() IngestProgress {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.cur
+}
+
+func (b *IngestBroadcaster) Subscribe() chan IngestProgress {
+	ch := make(chan IngestProgress, 8)
+	b.mu.Lock()
+	b.subs[ch] = struct{}{}
+	b.mu.Unlock()
+	return ch
+}
+
+func (b *IngestBroadcaster) Unsubscribe(ch chan IngestProgress) {
 	b.mu.Lock()
 	delete(b.subs, ch)
 	b.mu.Unlock()

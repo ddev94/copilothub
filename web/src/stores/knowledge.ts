@@ -111,6 +111,20 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     }
   }
 
+  async function refreshDocuments(projectId: string) {
+    if (!projectId) return;
+    try {
+      const [docsRes, pendingRes] = await Promise.all([
+        api.wiki.listDocuments(projectId),
+        api.wiki.listPending(projectId),
+      ]);
+      documents.value = docsRes.documents;
+      pendingDocuments.value = pendingRes.documents;
+    } catch {
+      /* silent */
+    }
+  }
+
   async function uploadFiles(
     files: File[],
     replaceDuplicates: boolean,
@@ -125,7 +139,14 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
       if (failed.length > 0) {
         error.value = `Upload failed: ${failed.map((f) => `${f.file}${f.message ? ` (${f.message})` : ""}`).join(", ")}`;
       }
-      await loadDocuments(projectId);
+      await refreshDocuments(projectId);
+      // Auto-approve all pending documents
+      if (pendingDocuments.value.length > 0) {
+        try {
+          await api.wiki.approveAll(projectId);
+          await refreshDocuments(projectId);
+        } catch { /* silent */ }
+      }
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Upload knowledge failed";
     } finally {
@@ -135,11 +156,14 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
 
   async function deleteDocument(id: string, projectId: string) {
     error.value = null;
+    documents.value = documents.value.filter((d) => d.id !== id);
+    pendingDocuments.value = pendingDocuments.value.filter((d) => d.id !== id);
     try {
       await api.wiki.deleteDocument(id, projectId);
-      await loadDocuments(projectId);
+      await refreshDocuments(projectId);
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Delete knowledge failed";
+      await refreshDocuments(projectId);
     }
   }
 
@@ -184,6 +208,7 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     threads,
     sessions,
     loadDocuments,
+    refreshDocuments,
     uploadFiles,
     deleteDocument,
     approveDocument,

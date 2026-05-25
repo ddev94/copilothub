@@ -72,4 +72,4 @@ help:
 	@echo "make clean           — remove build artifacts"
 
 start:
-	./bin/copilothub open -w ../Ferry
+	./bin/copilothub open

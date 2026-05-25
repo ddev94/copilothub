@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, onBeforeUnmount } from "vue";
 import { X } from "lucide-vue-next";
 import {
   DialogClose,
@@ -12,6 +12,7 @@ import {
 } from "reka-ui";
 import { Button } from "@/components/ui/button";
 import { useKnowledgeStore } from "@/stores/knowledge";
+import { api } from "@/api";
 import type { KnowledgeDocument } from "@/types";
 
 const props = defineProps<{
@@ -53,6 +54,65 @@ const duplicateNames = ref<string[]>([]);
 const deletingDoc = ref<KnowledgeDocument | null>(null);
 const deleting = ref(false);
 
+// ── Ingest progress polling (inline per-doc) ────────────────────────────────
+const ingestDocId = ref("");
+const ingestFileName = ref("");
+const ingestState = ref<"idle" | "running" | "completed" | "failed">("idle");
+const ingestMessage = ref("");
+const ingestPercent = ref(0);
+const ingestChunksDone = ref(0);
+const ingestChunksTotal = ref(0);
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let lastRefreshedDocId = "";
+
+function isDocEmbedding(doc: KnowledgeDocument) {
+  return ingestState.value === "running" && ingestDocId.value === doc.id;
+}
+
+function isDocFailed(doc: KnowledgeDocument) {
+  return ingestState.value === "failed" && ingestDocId.value === doc.id;
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(async () => {
+    try {
+      const p = await api.wiki.ingestProgress();
+      ingestState.value = p.state;
+      ingestMessage.value = p.message;
+      ingestPercent.value = p.percent;
+      ingestDocId.value = p.docId ?? "";
+      ingestFileName.value = p.fileName ?? "";
+      ingestChunksDone.value = p.chunksDone;
+      ingestChunksTotal.value = p.chunksTotal;
+
+      if (p.state === "completed") {
+        if (p.docId && p.docId !== lastRefreshedDocId) {
+          lastRefreshedDocId = p.docId;
+          await knowledge.refreshDocuments(props.projectId);
+        }
+      } else if (p.state === "idle") {
+        stopPolling();
+        if (lastRefreshedDocId !== "__idle__") {
+          lastRefreshedDocId = "__idle__";
+          await knowledge.refreshDocuments(props.projectId);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, 1200);
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+onBeforeUnmount(() => stopPolling());
+
 // Combined doc list — deduplicate by id (pending first)
 const allDocs = computed(() => {
   const seen = new Set<string>();
@@ -83,7 +143,6 @@ function onFileSelect(e: Event) {
   input.value = "";
   if (files.length === 0) return;
 
-  // Check for duplicates against both approved and pending docs
   const existingNames = new Set([
     ...knowledge.documents.map((d) => d.name),
     ...knowledge.pendingDocuments.map((d) => d.name),
@@ -141,6 +200,7 @@ async function startUpload(files: File[], replaceDuplicates: boolean) {
     try {
       await new Promise((r) => setTimeout(r, 300));
       queueItem.status = "embedding";
+      startPolling();
       await knowledge.uploadFiles(
         [queueItem.file],
         replaceDuplicates,
@@ -178,47 +238,12 @@ function cancelDelete() {
   deletingDoc.value = null;
 }
 
-// ── Approve / Reject ─────────────────────────────────────────────────────────
-async function approve(doc: KnowledgeDocument) {
-  await knowledge.approveDocument(doc.id, props.projectId);
-}
-
-async function reject(doc: KnowledgeDocument) {
-  await knowledge.rejectDocument(doc.id, props.projectId);
-}
-
-async function approveAll() {
-  await knowledge.approveAll(props.projectId);
-}
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function fileIcon(name: string) {
   if (name.endsWith(".md")) return "📄";
   if (name.endsWith(".pdf")) return "📕";
   if (name.endsWith(".docx")) return "📝";
   return "📎";
-}
-
-function statusBadge(doc: KnowledgeDocument) {
-  if (doc.status === "pending")
-    return {
-      label: "Pending",
-      cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-    };
-  if (doc.status === "approved")
-    return {
-      label: "Approved",
-      cls: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-    };
-  if (doc.status === "rejected")
-    return {
-      label: "Rejected",
-      cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
-    };
-  return {
-    label: doc.status ?? "Unknown",
-    cls: "bg-muted text-muted-foreground",
-  };
 }
 
 function formatDate(dateStr: string) {
@@ -232,13 +257,34 @@ function formatDate(dateStr: string) {
   });
 }
 
-// Reload on open, reset transient state on close
+// Reload on open, reset on close
 watch(
   () => props.open,
   async (val) => {
     if (val && props.projectId) {
-      await knowledge.loadDocuments(props.projectId);
+      // Use silent refresh if we already have data (no flicker)
+      if (allDocs.value.length > 0) {
+        knowledge.refreshDocuments(props.projectId);
+      } else {
+        await knowledge.loadDocuments(props.projectId);
+      }
+      try {
+        const p = await api.wiki.ingestProgress();
+        ingestState.value = p.state;
+        ingestMessage.value = p.message;
+        ingestPercent.value = p.percent;
+        ingestDocId.value = p.docId ?? "";
+        ingestFileName.value = p.fileName ?? "";
+        ingestChunksDone.value = p.chunksDone;
+        ingestChunksTotal.value = p.chunksTotal;
+        if (p.state === "running") startPolling();
+      } catch {
+        /* ignore */
+      }
     } else {
+      stopPolling();
+      ingestState.value = "idle";
+      lastRefreshedDocId = "";
       deletingDoc.value = null;
       showDuplicateConfirm.value = false;
       pendingFiles.value = [];
@@ -251,8 +297,7 @@ watch(
 <template>
   <DialogRoot :open="open" @update:open="emit('update:open', $event)">
     <DialogPortal>
-      <!-- Transparent overlay — no dark background -->
-      <DialogOverlay class="fixed inset-0 z-50" />
+      <DialogOverlay class="fixed inset-0 z-50 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
 
       <DialogContent
         class="fixed left-1/2 top-1/2 z-50 w-full max-w-2xl -translate-x-1/2 -translate-y-1/2 border border-border bg-background rounded-lg shadow-xl p-6 flex flex-col max-h-[80vh] duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
@@ -300,14 +345,6 @@ watch(
             class="hidden"
             @change="onFileSelect"
           />
-          <Button
-            v-if="knowledge.pendingDocuments.length > 0"
-            variant="outline"
-            size="sm"
-            @click="approveAll"
-          >
-            Approve all ({{ knowledge.pendingDocuments.length }})
-          </Button>
           <div class="flex-1" />
           <span class="text-xs text-muted-foreground">
             {{ allDocs.length }} tài liệu
@@ -335,7 +372,7 @@ watch(
           </div>
         </Transition>
 
-        <!-- Upload progress queue -->
+        <!-- Upload queue (uploading files not yet in doc list) -->
         <div v-if="uploadQueue.length > 0" class="space-y-1.5 pb-3">
           <TransitionGroup name="upload-item">
             <div
@@ -363,83 +400,34 @@ watch(
                 <span class="text-xs text-muted-foreground">Đang chờ…</span>
               </template>
               <template v-else-if="item.status === 'uploading'">
-                <span
-                  class="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400"
-                >
-                  <svg
-                    class="w-3.5 h-3.5 animate-spin"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      class="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      stroke-width="4"
-                    />
-                    <path
-                      class="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                    />
+                <span class="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400">
+                  <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                   </svg>
                   Uploading…
                 </span>
               </template>
               <template v-else-if="item.status === 'embedding'">
-                <span
-                  class="flex items-center gap-1.5 text-xs text-purple-600 dark:text-purple-400"
-                >
-                  <svg
-                    class="w-3.5 h-3.5 animate-spin"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      class="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      stroke-width="4"
-                    />
-                    <path
-                      class="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                    />
+                <span class="flex items-center gap-1.5 text-xs text-purple-600 dark:text-purple-400">
+                  <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                   </svg>
                   Embedding…
                 </span>
               </template>
               <template v-else-if="item.status === 'done'">
-                <span
-                  class="text-xs text-green-600 dark:text-green-400 flex items-center gap-1"
-                >
-                  <svg
-                    class="w-3.5 h-3.5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M5 13l4 4L19 7"
-                    />
+                <span class="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
                   </svg>
                   Hoàn tất
                 </span>
               </template>
               <template v-else-if="item.status === 'error'">
-                <span
-                  class="text-xs text-red-600 dark:text-red-400 truncate max-w-[200px]"
-                  :title="item.message"
-                >
-                  ✕ {{ item.message }}
+                <span class="text-xs text-red-600 dark:text-red-400 truncate max-w-[200px]" :title="item.message">
+                  {{ item.message }}
                 </span>
               </template>
             </div>
@@ -448,8 +436,9 @@ watch(
 
         <!-- Document list -->
         <div class="flex-1 overflow-y-auto min-h-0 -mx-1">
+          <!-- Only show loading on first empty load -->
           <div
-            v-if="knowledge.loading"
+            v-if="knowledge.loading && allDocs.length === 0"
             class="flex items-center justify-center py-8 text-sm text-muted-foreground"
           >
             Đang tải danh sách…
@@ -469,93 +458,82 @@ watch(
             <div
               v-for="doc in allDocs"
               :key="doc.id"
-              class="flex items-center gap-3 px-3 py-2.5 hover:bg-muted/50 transition-colors group"
+              class="px-3 py-2.5 hover:bg-muted/50 transition-colors group"
             >
-              <span class="shrink-0 text-base">{{ fileIcon(doc.name) }}</span>
-              <div class="flex-1 min-w-0">
-                <button
-                  class="text-sm font-medium truncate block text-left hover:underline w-full"
-                  @click="
-                    emit('select', doc);
-                    emit('update:open', false);
-                  "
+              <div class="flex items-center gap-3">
+                <!-- Icon: spinner if embedding this doc, else file icon -->
+                <span v-if="isDocEmbedding(doc)" class="shrink-0 w-5 h-5 flex items-center justify-center">
+                  <svg class="w-4 h-4 animate-spin text-purple-500" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                  </svg>
+                </span>
+                <span v-else class="shrink-0 text-base">{{ fileIcon(doc.name) }}</span>
+
+                <!-- Name + date -->
+                <div class="flex-1 min-w-0">
+                  <button
+                    class="text-sm font-medium truncate block text-left w-full"
+                    :class="doc.status === 'approved' ? 'hover:underline cursor-pointer' : 'opacity-50 cursor-not-allowed'"
+                    :disabled="doc.status !== 'approved'"
+                    @click="
+                      if (doc.status === 'approved') {
+                        emit('select', doc);
+                        emit('update:open', false);
+                      }
+                    "
+                  >
+                    {{ doc.name }}
+                  </button>
+                  <p v-if="!isDocEmbedding(doc)" class="text-[11px] text-muted-foreground mt-0.5">
+                    {{ formatDate(doc.createdAt) }}
+                  </p>
+                  <!-- Inline progress text for active doc -->
+                  <p v-else class="text-[11px] text-purple-600 dark:text-purple-400 mt-0.5">
+                    Embedding… {{ ingestChunksDone }}/{{ ingestChunksTotal }} chunks
+                  </p>
+                </div>
+
+                <!-- Status badge or progress % -->
+                <span
+                  v-if="isDocEmbedding(doc)"
+                  class="shrink-0 text-[10px] font-semibold text-purple-600 dark:text-purple-400 tabular-nums"
                 >
-                  {{ doc.name }}
-                </button>
-                <p class="text-[11px] text-muted-foreground mt-0.5">
-                  {{ formatDate(doc.createdAt) }}
-                </p>
+                  {{ ingestPercent }}%
+                </span>
+                <span
+                  v-else-if="isDocFailed(doc)"
+                  class="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                  :title="ingestMessage"
+                >
+                  Failed
+                </span>
+
+                <!-- Actions -->
+                <div
+                  class="shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <button
+                    v-if="!isDocEmbedding(doc)"
+                    class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors"
+                    title="Xoá"
+                    @click.stop="confirmDelete(doc)"
+                  >
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
               </div>
 
-              <span
-                class="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded"
-                :class="statusBadge(doc).cls"
-              >
-                {{ statusBadge(doc).label }}
-              </span>
-
-              <div
-                class="shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
-              >
-                <button
-                  v-if="doc.status === 'pending'"
-                  class="p-1 rounded hover:bg-green-100 dark:hover:bg-green-900/30 text-green-600 transition-colors"
-                  title="Approve"
-                  @click.stop="approve(doc)"
-                >
-                  <svg
-                    class="w-4 h-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M5 13l4 4L19 7"
-                    />
-                  </svg>
-                </button>
-                <button
-                  v-if="doc.status === 'pending'"
-                  class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors"
-                  title="Reject"
-                  @click.stop="reject(doc)"
-                >
-                  <svg
-                    class="w-4 h-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-                <button
-                  class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors"
-                  title="Xoá"
-                  @click.stop="confirmDelete(doc)"
-                >
-                  <svg
-                    class="w-4 h-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                    />
-                  </svg>
-                </button>
+              <!-- Inline progress bar under the active doc row -->
+              <div v-if="isDocEmbedding(doc)" class="mt-1.5 ml-8 mr-2">
+                <div class="h-1.5 bg-purple-100 dark:bg-purple-900/40 rounded-full overflow-hidden">
+                  <div
+                    class="h-full bg-purple-500 rounded-full transition-all duration-700 ease-out"
+                    :style="{ width: `${ingestPercent}%` }"
+                  />
+                </div>
               </div>
             </div>
           </div>
