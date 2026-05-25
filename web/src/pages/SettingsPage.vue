@@ -41,6 +41,7 @@ const AI_PROVIDERS = [
 const EMBED_PROVIDERS = [
   { value: "cybertron", label: "Local (all-MiniLM-L6-v2)", icon: "💻" },
   { value: "openai", label: "OpenAI Embeddings", icon: "🌐" },
+  { value: "google", label: "Google Gemini", icon: "🔷" },
   { value: "ollama", label: "Ollama", icon: "🦙" },
 ];
 
@@ -66,6 +67,7 @@ const OLLAMA_EMBED_MODELS = [
   "all-minilm",
   "mxbai-embed-large",
 ];
+const GOOGLE_EMBED_MODELS = ["gemini-embedding-2", "gemini-embedding-001"];
 
 const modelSuggestions = computed(() => {
   if (aiProvider.value === "openai") return OPENAI_MODELS;
@@ -75,6 +77,7 @@ const modelSuggestions = computed(() => {
 
 const embedModelSuggestions = computed(() => {
   if (embedProvider.value === "openai") return OPENAI_EMBED_MODELS;
+  if (embedProvider.value === "google") return GOOGLE_EMBED_MODELS;
   if (embedProvider.value === "ollama") return OLLAMA_EMBED_MODELS;
   return [];
 });
@@ -470,6 +473,39 @@ onUnmounted(() => {
                 placeholder="http://localhost:11434"
                 class="w-full text-sm rounded-md border border-input bg-background px-3 py-2 outline-none focus:ring-1 focus:ring-ring"
               />
+            </div>
+          </div>
+
+          <!-- Google Embeddings -->
+          <div v-if="embedProvider === 'google'" class="space-y-3">
+            <div class="space-y-1">
+              <label class="text-xs text-muted-foreground"
+                >API Key <span class="text-destructive">*</span></label
+              >
+              <input
+                v-model="embedKey"
+                type="password"
+                placeholder="AIza..."
+                class="w-full text-sm rounded-md border border-input bg-background px-3 py-2 outline-none focus:ring-1 focus:ring-ring"
+              />
+            </div>
+            <div class="space-y-1">
+              <label class="text-xs text-muted-foreground">Model</label>
+              <input
+                v-model="embedModel"
+                :placeholder="GOOGLE_EMBED_MODELS[0]"
+                class="w-full text-sm rounded-md border border-input bg-background px-3 py-2 outline-none focus:ring-1 focus:ring-ring"
+              />
+              <div class="flex flex-wrap gap-1 mt-1">
+                <button
+                  v-for="m in embedModelSuggestions"
+                  :key="m"
+                  class="text-xs px-2 py-0.5 rounded border border-border hover:border-primary/50 text-muted-foreground hover:text-foreground transition-colors"
+                  @click="embedModel = m"
+                >
+                  {{ m }}
+                </button>
+              </div>
             </div>
           </div>
         </div>

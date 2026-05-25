@@ -24,7 +24,7 @@ export interface AIConfig {
 export interface KnowledgeConfig {
   enabled: boolean;
   topK: number;
-  embeddingProvider: string; // "cybertron" | "openai" | "ollama"
+  embeddingProvider: string; // "cybertron" | "openai" | "ollama" | "google"
   embeddingModel: string;
   embeddingKey: string;
   embeddingURL: string;
@@ -120,13 +120,30 @@ export interface AuthStatus {
 }
 
 export interface ToolEvent {
-  kind: "read" | "write" | "shell" | "url" | "mcp" | "custom-tool" | "hook" | "memory";
+  kind:
+    | "read"
+    | "write"
+    | "shell"
+    | "url"
+    | "mcp"
+    | "custom-tool"
+    | "hook"
+    | "memory";
   path?: string;
   name?: string;
 }
 
 export type IssueSeverity = "high" | "medium" | "low";
-export type IssueCategory = "gap" | "conflict" | "ambiguity" | "suggestion" | "missing_flow" | "missing_edge_case" | "missing_constraint" | "inaccuracy" | "code_wiki_conflict";
+export type IssueCategory =
+  | "gap"
+  | "conflict"
+  | "ambiguity"
+  | "suggestion"
+  | "missing_flow"
+  | "missing_edge_case"
+  | "missing_constraint"
+  | "inaccuracy"
+  | "code_wiki_conflict";
 
 export interface FileRef {
   path: string;

@@ -3,6 +3,7 @@ package wiki
 import (
 	"context"
 	"copilothub/internal/ai"
+	"copilothub/internal/config"
 	"copilothub/internal/knowledge"
 	"copilothub/internal/project"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -30,9 +32,56 @@ var allowedExts = map[string]string{
 type Handler struct {
 	dataDir      string // ~/.copilothub
 	projectStore *project.Store
-	kc           atomic.Pointer[knowledge.Client]
-	aiProvider   ai.Provider
+	cfgStore     *config.Store
 	topK         int
+
+	kcMu  sync.Mutex
+	kc    atomic.Pointer[knowledge.Client]
+	kcKey string // fingerprint of last-used embedding config
+}
+
+// newAI creates a fresh AI provider from the current config (cheap, per-request).
+func (h *Handler) newAI() ai.Provider {
+	cfg, _ := h.cfgStore.Load()
+	return ai.NewProvider(cfg.AI.Provider, cfg.AI.Token, cfg.AI.Model, cfg.AI.BaseURL, h.dataDir)
+}
+
+// getKC returns the cached knowledge client, re-creating it if the embedding
+// config has changed since last init. Init is lazy — only triggered on first use.
+func (h *Handler) getKC() *knowledge.Client {
+	cfg, _ := h.cfgStore.Load()
+	key := cfg.Knowledge.EmbeddingProvider + "|" + cfg.Knowledge.EmbeddingModel + "|" +
+		cfg.Knowledge.EmbeddingKey + "|" + cfg.Knowledge.EmbeddingURL
+
+	if c := h.kc.Load(); c != nil && h.kcKey == key {
+		return c
+	}
+
+	h.kcMu.Lock()
+	defer h.kcMu.Unlock()
+	// double-check after acquiring lock
+	if c := h.kc.Load(); c != nil && h.kcKey == key {
+		return c
+	}
+
+	if !cfg.Knowledge.Enabled {
+		return nil
+	}
+	storeDir := filepath.Join(h.dataDir, "knowledge-store")
+	embedCfg := knowledge.EmbeddingConfig{
+		Provider: cfg.Knowledge.EmbeddingProvider,
+		Model:    cfg.Knowledge.EmbeddingModel,
+		Key:      cfg.Knowledge.EmbeddingKey,
+		URL:      cfg.Knowledge.EmbeddingURL,
+	}
+	client, err := knowledge.NewClient(storeDir, embedCfg)
+	if err != nil {
+		fmt.Printf("[wiki] knowledge store init failed: %v\n", err)
+		return nil
+	}
+	h.kc.Store(client)
+	h.kcKey = key
+	return client
 }
 
 type localProject struct {
@@ -59,20 +108,11 @@ type chatResp struct {
 	DetectedIntent string            `json:"detectedIntent,omitempty"`
 }
 
-func NewHandler(dataDir string, projectStore *project.Store, client *knowledge.Client, aiProvider ai.Provider, topK int) *Handler {
+func NewHandler(dataDir string, projectStore *project.Store, cfgStore *config.Store, topK int) *Handler {
 	if topK <= 0 {
 		topK = 6
 	}
-	h := &Handler{dataDir: dataDir, projectStore: projectStore, aiProvider: aiProvider, topK: topK}
-	if client != nil {
-		h.kc.Store(client)
-	}
-	return h
-}
-
-// SetClient sets the knowledge client after async initialization completes.
-func (h *Handler) SetClient(c *knowledge.Client) {
-	h.kc.Store(c)
+	return &Handler{dataDir: dataDir, projectStore: projectStore, cfgStore: cfgStore, topK: topK}
 }
 
 func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +121,8 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
-	if h.kc.Load() == nil {
+	c := h.getKC()
+	if c == nil {
 		writeError(w, "knowledge store đang khởi tạo, vui lòng thử lại sau", http.StatusServiceUnavailable)
 		return
 	}
@@ -100,7 +141,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	if intent == "" {
 		intent = detectIntent(req.Question)
 	}
-	chunks, err := h.retrieveRelatedChunks(r.Context(), projectID, req.Question)
+	chunks, err := h.retrieveRelatedChunks(r.Context(), c, projectID, req.Question)
 	if err != nil {
 		writeError(w, "knowledge retrieve failed: "+err.Error(), http.StatusBadGateway)
 		return
@@ -114,7 +155,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
-	c := h.kc.Load()
+	c := h.getKC()
 	if c == nil {
 		writeError(w, "knowledge store đang khởi tạo, vui lòng thử lại sau", http.StatusServiceUnavailable)
 		return
@@ -214,7 +255,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
-	c := h.kc.Load()
+	c := h.getKC()
 	if c == nil {
 		writeJSON(w, map[string]any{"documents": []knowledge.Document{}})
 		return
@@ -229,7 +270,7 @@ func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
-	c := h.kc.Load()
+	c := h.getKC()
 	if c == nil {
 		writeError(w, "knowledge store đang khởi tạo", http.StatusServiceUnavailable)
 		return
@@ -263,12 +304,13 @@ func (h *Handler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListPending(w http.ResponseWriter, r *http.Request) {
-	if h.kc.Load() == nil {
+	c := h.getKC()
+	if c == nil {
 		writeJSON(w, map[string]any{"documents": []knowledge.Document{}})
 		return
 	}
 	pid := r.URL.Query().Get("projectId")
-	docs, err := h.kc.Load().PendingDocuments(r.Context(), pid)
+	docs, err := c.PendingDocuments(r.Context(), pid)
 	if err != nil {
 		writeError(w, "failed to list pending: "+err.Error(), http.StatusBadGateway)
 		return
@@ -277,7 +319,8 @@ func (h *Handler) ListPending(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ApproveDocument(w http.ResponseWriter, r *http.Request) {
-	if h.kc.Load() == nil {
+	c := h.getKC()
+	if c == nil {
 		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
 		return
 	}
@@ -287,7 +330,7 @@ func (h *Handler) ApproveDocument(w http.ResponseWriter, r *http.Request) {
 	if approvedBy == "" {
 		approvedBy = "user"
 	}
-	if err := h.kc.Load().ApproveDocument(r.Context(), pid, docID, approvedBy); err != nil {
+	if err := c.ApproveDocument(r.Context(), pid, docID, approvedBy); err != nil {
 		writeError(w, "approve failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -295,13 +338,14 @@ func (h *Handler) ApproveDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) RejectDocument(w http.ResponseWriter, r *http.Request) {
-	if h.kc.Load() == nil {
+	c := h.getKC()
+	if c == nil {
 		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
 		return
 	}
 	docID := r.PathValue("id")
 	pid := r.URL.Query().Get("projectId")
-	if err := h.kc.Load().RejectDocument(r.Context(), pid, docID); err != nil {
+	if err := c.RejectDocument(r.Context(), pid, docID); err != nil {
 		writeError(w, "reject failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -309,7 +353,8 @@ func (h *Handler) RejectDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ApproveAll(w http.ResponseWriter, r *http.Request) {
-	if h.kc.Load() == nil {
+	c := h.getKC()
+	if c == nil {
 		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
 		return
 	}
@@ -318,7 +363,7 @@ func (h *Handler) ApproveAll(w http.ResponseWriter, r *http.Request) {
 	if approvedBy == "" {
 		approvedBy = "user"
 	}
-	count, err := h.kc.Load().ApproveAllPending(r.Context(), pid, approvedBy)
+	count, err := c.ApproveAllPending(r.Context(), pid, approvedBy)
 	if err != nil {
 		writeError(w, "approve all failed: "+err.Error(), http.StatusBadGateway)
 		return
@@ -379,11 +424,7 @@ func splitQueryChunks(q string) []string {
 	return chunks
 }
 
-func (h *Handler) retrieveRelatedChunks(ctx context.Context, projectID, question string) ([]knowledge.Chunk, error) {
-	c := h.kc.Load()
-	if c == nil {
-		return nil, fmt.Errorf("knowledge store chưa sẵn sàng")
-	}
+func (h *Handler) retrieveRelatedChunks(ctx context.Context, c *knowledge.Client, projectID, question string) ([]knowledge.Chunk, error) {
 
 	// For long queries (e.g. full spec documents), split into chunks and
 	// retrieve for each part so we don't exceed the embedding model's limit.
@@ -448,12 +489,16 @@ func detectIntent(question string) string {
 }
 
 func (h *Handler) expandByGraph(ctx context.Context, projectID, question string, chunks []knowledge.Chunk) []knowledge.Chunk {
-	nodes, err := h.kc.Load().SearchGraphNodes(ctx, projectID, question)
+	c := h.getKC()
+	if c == nil {
+		return chunks
+	}
+	nodes, err := c.SearchGraphNodes(ctx, projectID, question)
 	if err != nil || len(nodes) == 0 {
 		return chunks
 	}
 	for _, node := range nodes {
-		neighbors, edges, err := h.kc.Load().GetGraphNeighbors(ctx, projectID, node.ID, 1)
+		neighbors, edges, err := c.GetGraphNeighbors(ctx, projectID, node.ID, 1)
 		if err != nil {
 			continue
 		}
@@ -480,7 +525,8 @@ func (h *Handler) synthesizeAnswer(ctx context.Context, intent, sectionKey, ques
 	if len(chunks) == 0 {
 		return "Không tìm thấy thông tin liên quan trong knowledge của project đã chọn."
 	}
-	if h.aiProvider == nil {
+	aiProv := h.newAI()
+	if aiProv == nil {
 		return summarizeFromChunks(question, chunks)
 	}
 
@@ -542,7 +588,7 @@ Nếu dữ liệu chưa đủ, phải có mục “## Phần còn thiếu dữ l
 	defer cancel()
 
 	messages := []ai.Message{{Role: "user", Content: prompt}}
-	answer, err := h.aiProvider.Complete(aiCtx, messages)
+	answer, err := aiProv.Complete(aiCtx, messages)
 	if err != nil {
 		return fmt.Sprintf("Lỗi khi tổng hợp câu trả lời từ AI: %v", err)
 	}
@@ -591,7 +637,7 @@ func writeError(w http.ResponseWriter, msg string, code int) {
 }
 
 func (h *Handler) GetDocumentContent(w http.ResponseWriter, r *http.Request) {
-	c := h.kc.Load()
+	c := h.getKC()
 	if c == nil {
 		writeError(w, "knowledge store not ready", http.StatusServiceUnavailable)
 		return

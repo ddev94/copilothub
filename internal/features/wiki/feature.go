@@ -2,11 +2,8 @@ package wiki
 
 import (
 	"copilothub/internal/hub"
-	"copilothub/internal/knowledge"
 	"copilothub/pkg/version"
-	"fmt"
 	"net/http"
-	"path/filepath"
 )
 
 type Feature struct {
@@ -33,29 +30,7 @@ func (f *Feature) Manifest() hub.Manifest {
 
 func (f *Feature) Init(ctx hub.FeatureContext) error {
 	cfg, _ := ctx.Config.Load()
-
-	// Create handler — uses project store for listing and DataDir for knowledge storage
-	f.h = NewHandler(ctx.DataDir, ctx.ProjectStore, nil, ctx.AIProvider, cfg.Knowledge.TopK)
-
-	if cfg.Knowledge.Enabled {
-		storeDir := filepath.Join(ctx.DataDir, "knowledge-store")
-		embedCfg := knowledge.EmbeddingConfig{
-			Provider: cfg.Knowledge.EmbeddingProvider,
-			Model:    cfg.Knowledge.EmbeddingModel,
-			Key:      cfg.Knowledge.EmbeddingKey,
-			URL:      cfg.Knowledge.EmbeddingURL,
-		}
-		go func() {
-			client, err := knowledge.NewClient(storeDir, embedCfg)
-			if err != nil {
-				fmt.Printf("[wiki] knowledge store failed: %v\n", err)
-				return
-			}
-			f.h.SetClient(client)
-			fmt.Println("[wiki] knowledge store ready")
-		}()
-	}
-
+	f.h = NewHandler(ctx.DataDir, ctx.ProjectStore, ctx.Config, cfg.Knowledge.TopK)
 	return nil
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/nlpodyssey/cybertron/pkg/tasks"
 	"github.com/nlpodyssey/cybertron/pkg/tasks/textencoding"
 	chromem "github.com/philippgille/chromem-go"
+	"google.golang.org/genai"
 )
 
 const (
@@ -21,9 +22,9 @@ const (
 
 // EmbeddingConfig selects the embedding backend and its credentials.
 type EmbeddingConfig struct {
-	Provider string // "cybertron" (default) | "openai" | "ollama"
+	Provider string // "cybertron" (default) | "openai" | "ollama" | "google"
 	Model    string
-	Key      string // API key for openai
+	Key      string // API key for openai or google
 	URL      string // base URL for ollama
 }
 
@@ -35,6 +36,8 @@ func NewEmbeddingFunc(cfg EmbeddingConfig, modelsDir string) (chromem.EmbeddingF
 		return newOpenAIEmbeddingFunc(cfg.Key, cfg.Model)
 	case "ollama":
 		return newOllamaEmbeddingFunc(cfg.Model, cfg.URL)
+	case "google":
+		return newGoogleEmbeddingFunc(cfg.Key, cfg.Model)
 	default: // "cybertron" or ""
 		return newCybertronEmbeddingFunc(modelsDir)
 	}
@@ -56,6 +59,34 @@ func newOllamaEmbeddingFunc(model, baseURL string) (chromem.EmbeddingFunc, error
 		model = "nomic-embed-text"
 	}
 	return chromem.NewEmbeddingFuncOllama(model, baseURL), nil
+}
+
+func newGoogleEmbeddingFunc(apiKey, model string) (chromem.EmbeddingFunc, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("embeddingKey required for Google embeddings")
+	}
+	if model == "" {
+		model = "gemini-embedding-2"
+	}
+	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
+		APIKey: apiKey,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("google genai client: %w", err)
+	}
+	return func(ctx context.Context, text string) ([]float32, error) {
+		contents := []*genai.Content{
+			genai.NewContentFromText(text, genai.RoleUser),
+		}
+		result, err := client.Models.EmbedContent(ctx, model, contents, nil)
+		if err != nil {
+			return nil, fmt.Errorf("google embed: %w", err)
+		}
+		if len(result.Embeddings) == 0 {
+			return nil, fmt.Errorf("google embed: no embeddings returned")
+		}
+		return result.Embeddings[0].Values, nil
+	}, nil
 }
 
 // newCybertronEmbeddingFunc loads all-MiniLM-L6-v2 and broadcasts download progress.

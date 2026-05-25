@@ -23,7 +23,7 @@ type AIConfig struct {
 type KnowledgeConfig struct {
 	Enabled           bool   `json:"enabled"`
 	TopK              int    `json:"topK"`
-	EmbeddingProvider string `json:"embeddingProvider"` // "cybertron" | "openai" | "ollama"
+	EmbeddingProvider string `json:"embeddingProvider"` // "cybertron" | "openai" | "ollama" | "google"
 	EmbeddingModel    string `json:"embeddingModel"`
 	EmbeddingKey      string `json:"embeddingKey"`
 	EmbeddingURL      string `json:"embeddingURL"`

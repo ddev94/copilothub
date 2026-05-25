@@ -4,6 +4,7 @@ import (
 	"context"
 	"copilothub/internal/ai"
 	"copilothub/internal/ai/tools"
+	"copilothub/internal/config"
 	"copilothub/internal/project"
 	"copilothub/internal/repo"
 	"encoding/json"
@@ -23,15 +24,23 @@ func aiContext(_ *http.Request) (context.Context, context.CancelFunc) {
 
 // Handler handles all spec-clarify operations.
 type Handler struct {
-	provider     ai.Provider
+	cfgStore     *config.Store
+	dataDir      string
 	projectStore *project.Store
 }
 
-func NewHandler(provider ai.Provider, projectStore *project.Store) *Handler {
+func NewHandler(cfgStore *config.Store, dataDir string, projectStore *project.Store) *Handler {
 	return &Handler{
-		provider:     provider,
+		cfgStore:     cfgStore,
+		dataDir:      dataDir,
 		projectStore: projectStore,
 	}
+}
+
+// provider creates a fresh AI provider from the current config.
+func (h *Handler) provider() ai.Provider {
+	cfg, _ := h.cfgStore.Load()
+	return ai.NewProvider(cfg.AI.Provider, cfg.AI.Token, cfg.AI.Model, cfg.AI.BaseURL, h.dataDir)
 }
 
 // === Clarify Spec ===
@@ -312,7 +321,7 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ep, hasEvents := h.provider.(ai.EventingProvider)
+	ep, hasEvents := h.provider().(ai.EventingProvider)
 	if hasEvents {
 		if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
 			h.clarifySSE(w, ctx, messages, sourceTools, repoDirs, ep)
@@ -327,7 +336,7 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.provider.Complete(ctx, messages)
+	result, err := h.provider().Complete(ctx, messages)
 	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -528,7 +537,7 @@ func (h *Handler) Refine(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := aiContext(r)
 	defer cancel()
 
-	result, err := h.provider.Complete(ctx, []ai.Message{
+	result, err := h.provider().Complete(ctx, []ai.Message{
 		{Role: "system", Content: refineSystemPrompt},
 		{Role: "user", Content: prompt.String()},
 	})
