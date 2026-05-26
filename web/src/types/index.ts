@@ -111,6 +111,22 @@ export interface WikiChatRequest {
 export interface WikiChatResponse {
   answer: string;
   chunks: WikiChatChunk[];
+  detectedIntent?: string;
+}
+
+export type WikiThinkingStep =
+  | "detect_intent"
+  | "retrieve_chunks"
+  | "expand_graph"
+  | "synthesize_answer";
+
+export type WikiThinkingStatus = "started" | "completed" | "skipped" | "failed";
+
+export interface WikiThinkingEvent {
+  step: WikiThinkingStep;
+  status: WikiThinkingStatus;
+  summary: string;
+  data?: Record<string, unknown>;
 }
 
 export interface KnowledgeUploadResult {

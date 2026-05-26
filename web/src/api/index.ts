@@ -12,6 +12,7 @@ import type {
   WikiChatRequest,
   WikiChatResponse,
   EmbeddingStatus,
+  WikiThinkingEvent,
 } from "@/types";
 
 const BASE = "/api";
@@ -175,6 +176,57 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload),
       }),
+    chatStream: async (
+      payload: WikiChatRequest,
+      handlers: {
+        onStep: (event: WikiThinkingEvent) => void;
+        onFinal: (result: WikiChatResponse) => void;
+      },
+    ): Promise<void> => {
+      const res = await fetch(`${BASE}/features/wiki/chat/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        let boundary: number;
+        while ((boundary = buf.indexOf("\n\n")) !== -1) {
+          const block = buf.slice(0, boundary);
+          buf = buf.slice(boundary + 2);
+
+          let eventType = "message";
+          let dataLine = "";
+          for (const line of block.split("\n")) {
+            if (line.startsWith("event:")) eventType = line.slice(6).trim();
+            else if (line.startsWith("data:")) dataLine = line.slice(5).trim();
+          }
+          if (!dataLine) continue;
+
+          if (eventType === "step") {
+            handlers.onStep(JSON.parse(dataLine) as WikiThinkingEvent);
+          } else if (eventType === "final") {
+            handlers.onFinal(JSON.parse(dataLine) as WikiChatResponse);
+            return;
+          } else if (eventType === "error") {
+            throw new Error((JSON.parse(dataLine) as { error: string }).error);
+          }
+        }
+      }
+      throw new Error("Stream ended without final response");
+    },
     getDocumentContent: (docId: string, projectId: string) =>
       request<{
         content: string;
@@ -215,25 +267,6 @@ export const api = {
         {
           method: "DELETE",
         },
-      ),
-    listPending: (projectId: string) =>
-      request<{ documents: KnowledgeDocument[] }>(
-        `/features/wiki/knowledge/pending?projectId=${encodeURIComponent(projectId)}`,
-      ),
-    approveDocument: (id: string, projectId: string, approvedBy = "user") =>
-      request<{ ok: boolean }>(
-        `/features/wiki/knowledge/document/${id}/approve?projectId=${encodeURIComponent(projectId)}&approvedBy=${encodeURIComponent(approvedBy)}`,
-        { method: "POST" },
-      ),
-    rejectDocument: (id: string, projectId: string) =>
-      request<{ ok: boolean }>(
-        `/features/wiki/knowledge/document/${id}/reject?projectId=${encodeURIComponent(projectId)}`,
-        { method: "POST" },
-      ),
-    approveAll: (projectId: string, approvedBy = "user") =>
-      request<{ ok: boolean; count: number }>(
-        `/features/wiki/knowledge/approve-all?projectId=${encodeURIComponent(projectId)}&approvedBy=${encodeURIComponent(approvedBy)}`,
-        { method: "POST" },
       ),
   },
 };

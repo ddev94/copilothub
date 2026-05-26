@@ -8,7 +8,6 @@ const SESSIONS_STORAGE_KEY = "wiki_sessions_v1";
 
 export const useKnowledgeStore = defineStore("knowledge", () => {
   const documents = ref<KnowledgeDocument[]>([]);
-  const pendingDocuments = ref<KnowledgeDocument[]>([]);
   const loading = ref(false);
   const uploading = ref(false);
   const error = ref<string | null>(null);
@@ -92,18 +91,13 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
   async function loadDocuments(projectId: string) {
     if (!projectId) {
       documents.value = [];
-      pendingDocuments.value = [];
       return;
     }
     loading.value = true;
     error.value = null;
     try {
-      const [docsRes, pendingRes] = await Promise.all([
-        api.wiki.listDocuments(projectId),
-        api.wiki.listPending(projectId),
-      ]);
+      const docsRes = await api.wiki.listDocuments(projectId);
       documents.value = docsRes.documents;
-      pendingDocuments.value = pendingRes.documents;
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Load knowledge failed";
     } finally {
@@ -114,12 +108,8 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
   async function refreshDocuments(projectId: string) {
     if (!projectId) return;
     try {
-      const [docsRes, pendingRes] = await Promise.all([
-        api.wiki.listDocuments(projectId),
-        api.wiki.listPending(projectId),
-      ]);
+      const docsRes = await api.wiki.listDocuments(projectId);
       documents.value = docsRes.documents;
-      pendingDocuments.value = pendingRes.documents;
     } catch {
       /* silent */
     }
@@ -140,13 +130,6 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
         error.value = `Upload failed: ${failed.map((f) => `${f.file}${f.message ? ` (${f.message})` : ""}`).join(", ")}`;
       }
       await refreshDocuments(projectId);
-      // Auto-approve all pending documents
-      if (pendingDocuments.value.length > 0) {
-        try {
-          await api.wiki.approveAll(projectId);
-          await refreshDocuments(projectId);
-        } catch { /* silent */ }
-      }
     } catch (e) {
       error.value = e instanceof Error ? e.message : "Upload knowledge failed";
     } finally {
@@ -157,7 +140,6 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
   async function deleteDocument(id: string, projectId: string) {
     error.value = null;
     documents.value = documents.value.filter((d) => d.id !== id);
-    pendingDocuments.value = pendingDocuments.value.filter((d) => d.id !== id);
     try {
       await api.wiki.deleteDocument(id, projectId);
       await refreshDocuments(projectId);
@@ -167,41 +149,10 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     }
   }
 
-  async function approveDocument(id: string, projectId: string) {
-    error.value = null;
-    try {
-      await api.wiki.approveDocument(id, projectId);
-      await loadDocuments(projectId);
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : "Approve failed";
-    }
-  }
-
-  async function rejectDocument(id: string, projectId: string) {
-    error.value = null;
-    try {
-      await api.wiki.rejectDocument(id, projectId);
-      await loadDocuments(projectId);
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : "Reject failed";
-    }
-  }
-
-  async function approveAll(projectId: string) {
-    error.value = null;
-    try {
-      await api.wiki.approveAll(projectId);
-      await loadDocuments(projectId);
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : "Approve all failed";
-    }
-  }
-
   loadPersistedData();
 
   return {
     documents,
-    pendingDocuments,
     loading,
     uploading,
     error,
@@ -211,9 +162,6 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     refreshDocuments,
     uploadFiles,
     deleteDocument,
-    approveDocument,
-    rejectDocument,
-    approveAll,
     getThread,
     appendTurn,
     clearThread,

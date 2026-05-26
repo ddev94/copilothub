@@ -19,6 +19,95 @@ import (
 )
 
 const (
+	stepDetectIntent     = "detect_intent"
+	stepRetrieveChunks   = "retrieve_chunks"
+	stepExpandGraph      = "expand_graph"
+	stepSynthesizeAnswer = "synthesize_answer"
+)
+
+type chatStepEvent struct {
+	Step    string         `json:"step"`
+	Status  string         `json:"status"`
+	Summary string         `json:"summary"`
+	Data    map[string]any `json:"data,omitempty"`
+}
+
+func writeSSE(w http.ResponseWriter, event string, payload any) error {
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "event: %s\n", event); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+		return err
+	}
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	return nil
+}
+
+func (h *Handler) ChatStream(w http.ResponseWriter, r *http.Request) {
+	c := h.getKC()
+	if c == nil {
+		writeError(w, "knowledge store đang khởi tạo, vui lòng thử lại sau", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req chatReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Question) == "" {
+		writeError(w, "question is required", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	intent := strings.TrimSpace(req.Intent)
+	_ = writeSSE(w, "step", chatStepEvent{Step: stepDetectIntent, Status: "started", Summary: "Đang xác định intent"})
+	if intent == "" {
+		intent = h.detectIntentAI(r.Context(), req.Question)
+	}
+	queryType := detectQueryType(req.Question)
+	_ = writeSSE(w, "step", chatStepEvent{Step: stepDetectIntent, Status: "completed", Summary: "Đã xác định intent", Data: map[string]any{
+		"detectedIntent": intent,
+		"queryType":      queryType,
+	}})
+
+	out, err := h.runChatWithReporter(r.Context(), c, chatInput{
+		ProjectID:  req.ProjectId,
+		SectionKey: req.SectionKey,
+		Question:   req.Question,
+		History:    req.History,
+		Intent:     intent,
+	}, func(step string, status string, summary string, data map[string]any) {
+		_ = writeSSE(w, "step", chatStepEvent{Step: step, Status: status, Summary: summary, Data: data})
+	})
+	if err != nil {
+		_ = writeSSE(w, "error", map[string]string{"error": "knowledge retrieve failed: " + err.Error()})
+		return
+	}
+
+	// Final telemetry
+	_ = writeSSE(w, "step", chatStepEvent{Step: stepSynthesizeAnswer, Status: "completed", Summary: "Đã tổng hợp câu trả lời", Data: map[string]any{
+		"queryType":       out.QueryType,
+		"stopReason":      out.StopReason,
+		"usedGraph":       out.UsedGraph,
+		"chunksReturned":  len(out.Chunks),
+		"sourceDiversity": countUniqueSources(out.Chunks),
+	}})
+
+	_ = writeSSE(w, "final", chatResp{Answer: out.Answer, Chunks: out.Chunks, DetectedIntent: out.DetectedIntent})
+}
+
+const (
 	aiTimeout         = 5 * time.Minute
 	knowledgeFilesDir = "knowledge/files"
 )
@@ -110,7 +199,7 @@ type chatResp struct {
 
 func NewHandler(dataDir string, projectStore *project.Store, cfgStore *config.Store, topK int) *Handler {
 	if topK <= 0 {
-		topK = 6
+		topK = 15
 	}
 	return &Handler{dataDir: dataDir, projectStore: projectStore, cfgStore: cfgStore, topK: topK}
 }
@@ -136,22 +225,18 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "question is required", http.StatusBadRequest)
 		return
 	}
-	projectID := req.ProjectId
-	intent := strings.TrimSpace(req.Intent)
-	if intent == "" {
-		intent = detectIntent(req.Question)
-	}
-	chunks, err := h.retrieveRelatedChunks(r.Context(), c, projectID, req.Question)
+	out, err := h.runChat(r.Context(), c, chatInput{
+		ProjectID:  req.ProjectId,
+		SectionKey: req.SectionKey,
+		Question:   req.Question,
+		History:    req.History,
+		Intent:     req.Intent,
+	})
 	if err != nil {
 		writeError(w, "knowledge retrieve failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	if intent == "relationship_query" {
-		chunks = h.expandByGraph(r.Context(), projectID, req.Question, chunks)
-	}
-
-	answer := h.synthesizeAnswer(r.Context(), intent, req.SectionKey, req.Question, req.History, chunks)
-	writeJSON(w, chatResp{Answer: answer, Chunks: chunks, DetectedIntent: intent})
+	writeJSON(w, chatResp{Answer: out.Answer, Chunks: out.Chunks, DetectedIntent: out.DetectedIntent})
 }
 
 func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
@@ -244,7 +329,20 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		dst.Close()
 		file.Close()
 
-		if _, err := c.IngestAsync(r.Context(), pid, destPath, header.Filename, contentType); err != nil {
+		// PDF Refinery: use AI to convert raw PDF text to structured markdown
+		ingestPath := destPath
+		ingestName := header.Filename
+		if ext == ".pdf" {
+			if refined := h.refinePDF(r.Context(), destPath, header.Filename); refined != "" {
+				refinedPath := destPath + ".refined.md"
+				if err := os.WriteFile(refinedPath, []byte(refined), 0644); err == nil {
+					ingestPath = refinedPath
+					ingestName = header.Filename + ".refined.md"
+				}
+			}
+		}
+
+		if _, err := c.IngestAsync(r.Context(), pid, ingestPath, ingestName, contentType); err != nil {
 			results = append(results, uploadResult{File: header.Filename, OK: false, Message: "knowledge ingest failed: " + err.Error()})
 			continue
 		}
@@ -303,74 +401,6 @@ func (h *Handler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
-func (h *Handler) ListPending(w http.ResponseWriter, r *http.Request) {
-	c := h.getKC()
-	if c == nil {
-		writeJSON(w, map[string]any{"documents": []knowledge.Document{}})
-		return
-	}
-	pid := r.URL.Query().Get("projectId")
-	docs, err := c.PendingDocuments(r.Context(), pid)
-	if err != nil {
-		writeError(w, "failed to list pending: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, map[string]any{"documents": docs})
-}
-
-func (h *Handler) ApproveDocument(w http.ResponseWriter, r *http.Request) {
-	c := h.getKC()
-	if c == nil {
-		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
-		return
-	}
-	docID := r.PathValue("id")
-	pid := r.URL.Query().Get("projectId")
-	approvedBy := r.URL.Query().Get("approvedBy")
-	if approvedBy == "" {
-		approvedBy = "user"
-	}
-	if err := c.ApproveDocument(r.Context(), pid, docID, approvedBy); err != nil {
-		writeError(w, "approve failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, map[string]bool{"ok": true})
-}
-
-func (h *Handler) RejectDocument(w http.ResponseWriter, r *http.Request) {
-	c := h.getKC()
-	if c == nil {
-		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
-		return
-	}
-	docID := r.PathValue("id")
-	pid := r.URL.Query().Get("projectId")
-	if err := c.RejectDocument(r.Context(), pid, docID); err != nil {
-		writeError(w, "reject failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, map[string]bool{"ok": true})
-}
-
-func (h *Handler) ApproveAll(w http.ResponseWriter, r *http.Request) {
-	c := h.getKC()
-	if c == nil {
-		writeError(w, "knowledge service is disabled", http.StatusServiceUnavailable)
-		return
-	}
-	pid := r.URL.Query().Get("projectId")
-	approvedBy := r.URL.Query().Get("approvedBy")
-	if approvedBy == "" {
-		approvedBy = "user"
-	}
-	count, err := c.ApproveAllPending(r.Context(), pid, approvedBy)
-	if err != nil {
-		writeError(w, "approve all failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, map[string]any{"ok": true, "count": count})
-}
-
 func (h *Handler) registeredProjects() []localProject {
 	if h.projectStore == nil {
 		return []localProject{}
@@ -395,228 +425,26 @@ func (h *Handler) projectFilesDir(pid string) string {
 	return filepath.Join(h.dataDir, "projects", pid, knowledgeFilesDir)
 }
 
-// maxEmbeddingChars is a safe character limit to stay within the 512-token
-// embedding model constraint (~4 chars per token on average).
-const maxEmbeddingChars = 1800
-
-// splitQueryChunks splits a long query into overlapping chunks, each within
-// maxEmbeddingChars, splitting at paragraph or word boundaries.
-func splitQueryChunks(q string) []string {
-	if len(q) <= maxEmbeddingChars {
-		return []string{q}
-	}
-	var chunks []string
-	for len(q) > 0 {
-		if len(q) <= maxEmbeddingChars {
-			chunks = append(chunks, q)
-			break
-		}
-		cut := q[:maxEmbeddingChars]
-		// Prefer paragraph boundary, then word boundary.
-		if idx := strings.LastIndex(cut, "\n\n"); idx > maxEmbeddingChars/2 {
-			cut = cut[:idx]
-		} else if idx := strings.LastIndexAny(cut, "\n "); idx > maxEmbeddingChars/2 {
-			cut = cut[:idx]
-		}
-		chunks = append(chunks, strings.TrimSpace(cut))
-		q = strings.TrimSpace(q[len(cut):])
-	}
-	return chunks
-}
-
-func (h *Handler) retrieveRelatedChunks(ctx context.Context, c *knowledge.Client, projectID, question string) ([]knowledge.Chunk, error) {
-
-	// For long queries (e.g. full spec documents), split into chunks and
-	// retrieve for each part so we don't exceed the embedding model's limit.
-	queryChunks := splitQueryChunks(question)
-	var mainChunks []knowledge.Chunk
-	for _, qc := range queryChunks {
-		got, err := c.Retrieve(ctx, projectID, qc, h.topK)
-		if err != nil {
-			return nil, err
-		}
-		mainChunks = append(mainChunks, got...)
-	}
-
-	// Extract key terms for broader retrieval
-	words := strings.Fields(question)
-	var relatedChunks []knowledge.Chunk
-	if len(words) > 2 {
-		subQuery := strings.Join(words[:len(words)/2], " ")
-		if len(subQuery) > maxEmbeddingChars {
-			subQuery = subQuery[:maxEmbeddingChars]
-		}
-		if sub, err := c.Retrieve(ctx, projectID, subQuery, h.topK/2); err == nil {
-			relatedChunks = append(relatedChunks, sub...)
-		}
-	}
-
-	// Deduplicate by content similarity
-	seen := make(map[string]bool)
-	var merged []knowledge.Chunk
-	for _, chunk := range append(mainChunks, relatedChunks...) {
-		key := strings.TrimSpace(chunk.Content)
-		if len(key) > 100 {
-			key = key[:100]
-		}
-		if !seen[key] {
-			seen[key] = true
-			merged = append(merged, chunk)
-		}
-	}
-
-	if len(merged) > h.topK*2 {
-		merged = merged[:h.topK*2]
-	}
-	return merged, nil
-}
-
 func detectIntent(question string) string {
 	q := strings.ToLower(question)
-	if strings.Contains(q, "quan hệ") || strings.Contains(q, "liên quan") || strings.Contains(q, "ảnh hưởng") || strings.Contains(q, "phụ thuộc") {
+	// Only classify away from fact_lookup with EXTREMELY explicit signals.
+	// "quan hệ giữa X và Y" requires both "quan hệ giữa" AND "và"
+	if (strings.Contains(q, "quan hệ giữa") || strings.Contains(q, "phụ thuộc giữa")) && strings.Contains(q, "và") {
 		return "relationship_query"
 	}
-	if strings.Contains(q, "hiện tại") || strings.Contains(q, "đang") || strings.Contains(q, "as-is") {
+	// Only as_is when explicitly asking "as-is" or "trạng thái hiện tại" (not just "hiện tại")
+	if strings.Contains(q, "as-is") || strings.Contains(q, "trạng thái hiện tại") {
 		return "as_is"
 	}
-	if strings.Contains(q, "thay đổi") || strings.Contains(q, "to-be") || strings.Contains(q, "impact") || strings.Contains(q, "mới") {
+	// Only to_be when explicitly asking "to-be" or comparing before/after
+	if strings.Contains(q, "to-be") || (strings.Contains(q, "so sánh") && strings.Contains(q, "hiện tại")) {
 		return "to_be"
 	}
-	if strings.Contains(q, "tóm tắt") || strings.Contains(q, "summary") {
+	if strings.Contains(q, "tóm tắt") || strings.Contains(q, "tổng quan") || strings.Contains(q, "summary") {
 		return "summary"
 	}
+	// Default: always fact_lookup
 	return "fact_lookup"
-}
-
-func (h *Handler) expandByGraph(ctx context.Context, projectID, question string, chunks []knowledge.Chunk) []knowledge.Chunk {
-	c := h.getKC()
-	if c == nil {
-		return chunks
-	}
-	nodes, err := c.SearchGraphNodes(ctx, projectID, question)
-	if err != nil || len(nodes) == 0 {
-		return chunks
-	}
-	for _, node := range nodes {
-		neighbors, edges, err := c.GetGraphNeighbors(ctx, projectID, node.ID, 1)
-		if err != nil {
-			continue
-		}
-		for _, n := range neighbors {
-			chunks = append(chunks, knowledge.Chunk{
-				Content: fmt.Sprintf("[Graph] %s (%s)", n.CanonicalName, n.Type),
-				Score:   0.7,
-			})
-		}
-		for _, e := range edges {
-			chunks = append(chunks, knowledge.Chunk{
-				Content: fmt.Sprintf("[Relation] %s", e.RelationType),
-				Score:   0.6,
-			})
-		}
-		if len(chunks) > h.topK*3 {
-			break
-		}
-	}
-	return chunks
-}
-
-func (h *Handler) synthesizeAnswer(ctx context.Context, intent, sectionKey, question string, history []chatTurn, chunks []knowledge.Chunk) string {
-	if len(chunks) == 0 {
-		return "Không tìm thấy thông tin liên quan trong knowledge của project đã chọn."
-	}
-	aiProv := h.newAI()
-	if aiProv == nil {
-		return summarizeFromChunks(question, chunks)
-	}
-
-	var contextBuilder strings.Builder
-	contextBuilder.WriteString("# Ngữ cảnh hội thoại\n")
-	if sectionKey != "" {
-		fmt.Fprintf(&contextBuilder, "Section: %s\n", sectionKey)
-	}
-	if len(history) > 0 {
-		contextBuilder.WriteString("\nLịch sử hội thoại gần đây:\n")
-		start := 0
-		if len(history) > 3 {
-			start = len(history) - 3
-		}
-		for i := start; i < len(history); i++ {
-			fmt.Fprintf(&contextBuilder, "Q: %s\nA: %s\n\n", history[i].Question, history[i].Answer)
-		}
-	}
-
-	contextBuilder.WriteString("\n# Các đoạn knowledge liên quan\n\n")
-	for i, chunk := range chunks {
-		fmt.Fprintf(&contextBuilder, "--- Đoạn %d (score: %.2f) ---\n%s\n\n", i+1, chunk.Score, strings.TrimSpace(chunk.Content))
-	}
-
-	intentGuide := map[string]string{
-		"relationship_query": "Tập trung giải thích các quan hệ phụ thuộc, tác động qua lại và chuỗi ảnh hưởng giữa các thực thể nghiệp vụ.",
-		"as_is":              "Phân tích trạng thái hiện tại (As-is), không giả định thay đổi mới.",
-		"to_be":              "Phân tích thay đổi To-be và impact so với luồng hiện tại.",
-		"summary":            "Tóm tắt ngắn gọn, rõ ràng theo ý chính.",
-		"fact_lookup":        "Trả lời trực tiếp theo facts trong knowledge đã verify.",
-	}
-	guide := intentGuide[intent]
-	if guide == "" {
-		guide = intentGuide["fact_lookup"]
-	}
-
-	prompt := fmt.Sprintf(`%s
-# Câu hỏi hiện tại
-%s
-
-# Intent phát hiện
-%s
-
-# Yêu cầu trả lời
-Bạn là Business Analyst và viết theo phong cách NotebookLM: tự nhiên, mạch lạc, dễ đọc, tổng hợp từ nhiều nguồn nhưng không sa đà kỹ thuật.
-
-BẮT BUỘC format output dưới dạng MARKDOWN có cấu trúc rõ ràng:
-- Dùng heading cấp 2 (## Tiêu đề) cho từng phần lớn.
-- Dùng numbered list cho các bước tuần tự, bullet list cho các ý rời.
-- Dùng checkbox “- [ ]” cho checklist xác nhận.
-- In đậm (**từ khóa**) cho các khái niệm nghiệp vụ quan trọng.
-- Không viết plain text liền mạch không có heading hay list.
-
-Chỉ sử dụng dữ liệu từ knowledge đã được duyệt.
-Nếu dữ liệu chưa đủ, phải có mục “## Phần còn thiếu dữ liệu” và liệt kê câu hỏi cần bổ sung.
-`, contextBuilder.String(), question, guide)
-
-	aiCtx, cancel := context.WithTimeout(ctx, aiTimeout)
-	defer cancel()
-
-	messages := []ai.Message{{Role: "user", Content: prompt}}
-	answer, err := aiProv.Complete(aiCtx, messages)
-	if err != nil {
-		return fmt.Sprintf("Lỗi khi tổng hợp câu trả lời từ AI: %v", err)
-	}
-	return strings.TrimSpace(answer)
-}
-
-func summarizeFromChunks(question string, chunks []knowledge.Chunk) string {
-	if len(chunks) == 0 {
-		return "Không tìm thấy thông tin liên quan trong knowledge của project đã chọn."
-	}
-	var b strings.Builder
-	b.WriteString("Dựa trên knowledge của project, thông tin liên quan:\n")
-	limit := len(chunks)
-	if limit > 3 {
-		limit = 3
-	}
-	for i := 0; i < limit; i++ {
-		c := strings.TrimSpace(chunks[i].Content)
-		if c == "" {
-			continue
-		}
-		if len(c) > 700 {
-			c = c[:700] + "..."
-		}
-		fmt.Fprintf(&b, "- %s\n", c)
-	}
-	_ = question
-	return strings.TrimSpace(b.String())
 }
 
 func aiContext(r *http.Request) (context.Context, context.CancelFunc) {
@@ -647,10 +475,9 @@ func (h *Handler) GetDocumentContent(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	allDocs, _ := c.ListDocuments(ctx, pid)
-	pendingDocs, _ := c.PendingDocuments(ctx, pid)
 
 	var sourceFile, name string
-	for _, d := range append(allDocs, pendingDocs...) {
+	for _, d := range allDocs {
 		if d.ID == docID {
 			sourceFile = d.SourceFile
 			name = d.Name
@@ -696,4 +523,52 @@ func (h *Handler) ResyncOrphans(w http.ResponseWriter, r *http.Request) {
 	filesDir := h.projectFilesDir(pid)
 	count := c.SyncOrphanFiles(pid, filesDir)
 	writeJSON(w, map[string]any{"ok": true, "resynced": count})
+}
+
+func (h *Handler) GraphStats(w http.ResponseWriter, r *http.Request) {
+	c := h.kc.Load()
+	if c == nil {
+		writeError(w, "knowledge store not ready", http.StatusServiceUnavailable)
+		return
+	}
+	health, err := c.GraphHealth()
+	if err != nil {
+		writeError(w, "graph stats unavailable: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"nodes":        health.NodeCount,
+		"edges":        health.EdgeCount,
+		"revision":     health.Revision,
+		"lastModified": health.LastModified,
+	})
+}
+
+func (h *Handler) RebuildGraph(w http.ResponseWriter, r *http.Request) {
+	c := h.getKC()
+	if c == nil {
+		writeError(w, "knowledge store not ready", http.StatusServiceUnavailable)
+		return
+	}
+	pid := r.URL.Query().Get("projectId")
+	if pid == "" {
+		writeError(w, "projectId is required", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+
+	if err := c.RebuildGraphForProject(ctx, pid); err != nil {
+		writeError(w, "graph rebuild failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	health, _ := c.GraphHealth()
+	writeJSON(w, map[string]any{
+		"ok":       true,
+		"nodes":    health.NodeCount,
+		"edges":    health.EdgeCount,
+		"revision": health.Revision,
+	})
 }

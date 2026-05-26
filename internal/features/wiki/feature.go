@@ -37,14 +37,13 @@ func (f *Feature) Init(ctx hub.FeatureContext) error {
 func (f *Feature) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /projects", f.h.ListProjects)
 	mux.HandleFunc("POST /chat", f.h.Chat)
+	mux.HandleFunc("POST /chat/stream", f.h.ChatStream)
 	mux.HandleFunc("POST /knowledge/upload", f.h.Upload)
 	mux.HandleFunc("GET /knowledge/documents", f.h.ListDocuments)
 	mux.HandleFunc("DELETE /knowledge/document/{id}", f.h.DeleteDocument)
-	mux.HandleFunc("GET /knowledge/pending", f.h.ListPending)
-	mux.HandleFunc("POST /knowledge/document/{id}/approve", f.h.ApproveDocument)
-	mux.HandleFunc("POST /knowledge/document/{id}/reject", f.h.RejectDocument)
-	mux.HandleFunc("POST /knowledge/approve-all", f.h.ApproveAll)
 	mux.HandleFunc("GET /knowledge/content", f.h.GetDocumentContent)
 	mux.HandleFunc("GET /knowledge/ingest-progress", f.h.IngestProgress)
+	mux.HandleFunc("GET /knowledge/graph-stats", f.h.GraphStats)
+	mux.HandleFunc("POST /knowledge/graph-rebuild", f.h.RebuildGraph)
 	mux.HandleFunc("POST /knowledge/resync", f.h.ResyncOrphans)
 }

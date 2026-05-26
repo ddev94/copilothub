@@ -9,7 +9,6 @@ import json from "highlight.js/lib/languages/json";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import "highlight.js/styles/github.css";
-import { Button } from "@/components/ui/button";
 import { useKnowledgeStore } from "@/stores/knowledge";
 import { useProjectStore } from "@/stores/repo";
 import { api } from "@/api";
@@ -93,10 +92,7 @@ const showManageModal = ref(false);
 // Chat
 const chatInput = ref("");
 
-const allDocs = computed(() => [
-  ...knowledge.pendingDocuments.map((d) => ({ ...d, _pending: true })),
-  ...knowledge.documents,
-]);
+const allDocs = computed(() => knowledge.documents);
 
 // ── Document loading ─────────────────────────────────────────────────────────
 async function selectDoc(doc: KnowledgeDocument) {
@@ -208,54 +204,9 @@ watch(projectId, async (p) => {
         </div>
 
         <nav class="flex-1 overflow-y-auto py-1">
-          <div v-if="knowledge.pendingDocuments.length > 0" class="mb-1">
-            <p
-              class="px-3 py-1 text-[10px] font-semibold text-amber-600 uppercase tracking-wider"
-            >
-              ⏳ Pending
-            </p>
+          <div v-if="allDocs.length > 0">
             <button
-              v-for="doc in knowledge.pendingDocuments"
-              :key="doc.id"
-              class="w-full text-left px-3 py-1.5 text-xs rounded-sm mx-1 transition-colors hover:bg-muted flex items-center gap-2"
-              :class="
-                selectedDoc?.id === doc.id
-                  ? 'bg-primary/10 text-primary font-medium'
-                  : 'text-muted-foreground'
-              "
-              @click="selectDoc(doc)"
-            >
-              <span class="shrink-0">{{
-                doc.name.endsWith(".md")
-                  ? "📄"
-                  : doc.name.endsWith(".pdf")
-                    ? "📕"
-                    : "📝"
-              }}</span>
-              <span class="truncate">{{ doc.name }}</span>
-            </button>
-            <div class="px-3 pt-1 pb-2 flex gap-1">
-              <Button
-                variant="outline"
-                size="sm"
-                class="h-6 text-[10px] px-2 flex-1"
-                :disabled="knowledge.pendingDocuments.length === 0"
-                @click="knowledge.approveAll(projectId)"
-                >Approve all</Button
-              >
-            </div>
-          </div>
-
-          <div
-            v-if="
-              knowledge.documents.filter((d) => d.status === 'approved')
-                .length > 0
-            "
-          >
-            <button
-              v-for="doc in knowledge.documents.filter(
-                (d) => d.status === 'approved',
-              )"
+              v-for="doc in allDocs"
               :key="doc.id"
               class="w-full text-left px-3 py-1.5 text-xs rounded-sm mx-1 transition-colors hover:bg-muted flex items-center gap-2"
               :class="

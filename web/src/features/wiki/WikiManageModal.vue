@@ -113,23 +113,9 @@ function stopPolling() {
 
 onBeforeUnmount(() => stopPolling());
 
-// Combined doc list — deduplicate by id (pending first)
+// Combined doc list
 const allDocs = computed(() => {
-  const seen = new Set<string>();
-  const result: KnowledgeDocument[] = [];
-  for (const d of knowledge.pendingDocuments) {
-    if (!seen.has(d.id)) {
-      seen.add(d.id);
-      result.push(d);
-    }
-  }
-  for (const d of knowledge.documents) {
-    if (!seen.has(d.id)) {
-      seen.add(d.id);
-      result.push(d);
-    }
-  }
-  return result;
+  return knowledge.documents;
 });
 
 // ── Upload logic ─────────────────────────────────────────────────────────────
@@ -145,7 +131,6 @@ function onFileSelect(e: Event) {
 
   const existingNames = new Set([
     ...knowledge.documents.map((d) => d.name),
-    ...knowledge.pendingDocuments.map((d) => d.name),
   ]);
   const dupes = files
     .filter((f) => existingNames.has(f.name))

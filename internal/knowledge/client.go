@@ -75,8 +75,9 @@ type Document struct {
 
 // Chunk is a retrieved text segment with similarity score.
 type Chunk struct {
-	Content string  `json:"content"`
-	Score   float64 `json:"score"`
+	Content    string  `json:"content"`
+	Score      float64 `json:"score"`
+	SourceFile string  `json:"sourceFile,omitempty"`
 }
 
 // NewClient opens (or creates) a knowledge store at storeDir using the given embedding config.
@@ -142,6 +143,12 @@ func (c *Client) Ingest(ctx context.Context, projectID, filePath, fileName, _ st
 		return fmt.Errorf("document produced no chunks: %s", fileName)
 	}
 
+	// Contextual Chunking: enrich each chunk with file-level metadata
+	chunks = enrichChunksWithContext(chunks, ContextualChunkOpts{
+		FileName: fileName,
+		Summary:  generateDocSummary(text),
+	})
+
 	col, err := c.collection(ctx, projectID)
 	if err != nil {
 		return err
@@ -177,8 +184,8 @@ func (c *Client) Ingest(ctx context.Context, projectID, filePath, fileName, _ st
 		Name:       fileName,
 		SourceFile: fileName,
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		Status:     "pending",
-		Verified:   false,
+		Status:     "approved",
+		Verified:   true,
 		Confidence: 0.8,
 		SourceType: "upload",
 	})
@@ -208,6 +215,12 @@ func (c *Client) IngestAsync(ctx context.Context, projectID, filePath, fileName,
 		return "", fmt.Errorf("document produced no chunks: %s", fileName)
 	}
 
+	// Contextual Chunking: enrich each chunk with file-level metadata
+	chunks = enrichChunksWithContext(chunks, ContextualChunkOpts{
+		FileName: fileName,
+		Summary:  generateDocSummary(text),
+	})
+
 	docID := uuid.New().String()
 
 	// Save metadata immediately so the document appears in the list
@@ -218,8 +231,8 @@ func (c *Client) IngestAsync(ctx context.Context, projectID, filePath, fileName,
 		Name:       fileName,
 		SourceFile: fileName,
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		Status:     "pending",
-		Verified:   false,
+		Status:     "approved",
+		Verified:   true,
 		Confidence: 0.8,
 		SourceType: sourceType,
 	})
@@ -322,6 +335,21 @@ func (c *Client) ingestBackground(projectID, docID, fileName string, chunks []st
 		ChunksTotal: total,
 		Percent:     100,
 	})
+
+	go func(pid string) {
+		rebuildCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		if err := c.RebuildGraphForProject(rebuildCtx, pid); err != nil {
+			fmt.Printf("[knowledge/graph] rebuild failed project=%s err=%v\n", pid, err)
+			return
+		}
+		nodes, edges, revision, err := c.GraphStats()
+		if err != nil {
+			fmt.Printf("[knowledge/graph] stats failed err=%v\n", err)
+			return
+		}
+		fmt.Printf("[knowledge/graph] rebuilt project=%s nodes=%d edges=%d revision=%d\n", pid, nodes, edges, revision)
+	}(projectID)
 }
 
 // ListDocuments returns metadata for all documents stored under projectID.
@@ -393,102 +421,15 @@ func (c *Client) Retrieve(ctx context.Context, projectID, query string, topK int
 		return nil, fmt.Errorf("vector query: %w", err)
 	}
 
-	approved := c.approvedDocIDSet(projectID)
 	chunks := make([]Chunk, 0, len(results))
 	for _, r := range results {
-		docID := ""
+		source := ""
 		if r.Metadata != nil {
-			docID = r.Metadata["doc_id"]
+			source = r.Metadata["source"]
 		}
-		if !approved[docID] {
-			continue
-		}
-		chunks = append(chunks, Chunk{Content: r.Content, Score: float64(r.Similarity)})
+		chunks = append(chunks, Chunk{Content: r.Content, Score: float64(r.Similarity), SourceFile: source})
 	}
 	return chunks, nil
-}
-
-func (c *Client) PendingDocuments(_ context.Context, projectID string) ([]Document, error) {
-	c.meta.mu.RLock()
-	defer c.meta.mu.RUnlock()
-
-	docs := []Document{}
-	for _, e := range c.meta.docs {
-		if e.ProjectID == projectID && e.Status == "pending" {
-			docs = append(docs, Document{ID: e.DocID, Name: e.Name, SourceFile: e.SourceFile, CreatedAt: e.CreatedAt, Status: e.Status, Verified: e.Verified, Confidence: e.Confidence, SourceType: e.SourceType})
-		}
-	}
-	return docs, nil
-}
-
-func (c *Client) ApproveDocument(_ context.Context, projectID, docID, approvedBy string) error {
-	c.meta.mu.Lock()
-	found := false
-	for i := range c.meta.docs {
-		e := &c.meta.docs[i]
-		if e.ProjectID == projectID && e.DocID == docID {
-			e.Status = "approved"
-			e.Verified = true
-			e.ApprovedBy = approvedBy
-			e.ApprovedAt = time.Now().UTC().Format(time.RFC3339)
-			e.RejectedAt = ""
-			found = true
-			break
-		}
-	}
-	c.meta.mu.Unlock()
-	if !found {
-		return fmt.Errorf("document not found: %s", docID)
-	}
-	return c.meta.save()
-}
-
-func (c *Client) RejectDocument(_ context.Context, projectID, docID string) error {
-	c.meta.mu.Lock()
-	found := false
-	for i := range c.meta.docs {
-		e := &c.meta.docs[i]
-		if e.ProjectID == projectID && e.DocID == docID {
-			e.Status = "rejected"
-			e.Verified = false
-			e.ApprovedBy = ""
-			e.ApprovedAt = ""
-			e.RejectedAt = time.Now().UTC().Format(time.RFC3339)
-			found = true
-			break
-		}
-	}
-	c.meta.mu.Unlock()
-	if !found {
-		return fmt.Errorf("document not found: %s", docID)
-	}
-	return c.meta.save()
-}
-
-func (c *Client) ApproveAllPending(ctx context.Context, projectID, approvedBy string) (int, error) {
-	pending, err := c.PendingDocuments(ctx, projectID)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, doc := range pending {
-		if err := c.ApproveDocument(ctx, projectID, doc.ID, approvedBy); err == nil {
-			count++
-		}
-	}
-	return count, nil
-}
-
-func (c *Client) approvedDocIDSet(projectID string) map[string]bool {
-	c.meta.mu.RLock()
-	defer c.meta.mu.RUnlock()
-	m := map[string]bool{}
-	for _, e := range c.meta.docs {
-		if e.ProjectID == projectID && e.Status == "approved" && e.Verified {
-			m[e.DocID] = true
-		}
-	}
-	return m
 }
 
 // SyncOrphanFiles scans the given directory for files that exist on disk but
@@ -937,4 +878,32 @@ func (ms *metaStore) save() error {
 		return err
 	}
 	return os.WriteFile(ms.path, data, 0644)
+}
+
+// generateDocSummary creates a quick summary from the first portion of text.
+// Used for contextual chunking enrichment (runs locally, no AI call needed).
+func generateDocSummary(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	// Extract first meaningful content (first 500 chars, first paragraph or heading)
+	lines := strings.SplitN(text, "\n", 20)
+	var summary strings.Builder
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if summary.Len()+len(line) > 200 {
+			break
+		}
+		if summary.Len() > 0 {
+			summary.WriteString(" ")
+		}
+		// Strip markdown markers for cleaner summary
+		line = strings.TrimLeft(line, "# ")
+		summary.WriteString(line)
+	}
+	return summary.String()
 }
