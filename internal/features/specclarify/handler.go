@@ -157,7 +157,19 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 				var sb strings.Builder
 				sb.WriteString("## Relevant source code (retrieved from codebase index)\n\n")
 				for _, c := range chunks {
-					sb.WriteString(fmt.Sprintf("### File: %s (relevance: %.2f)\n```\n%s\n```\n\n", c.FilePath, c.Score, c.Content))
+					header := fmt.Sprintf("### File: %s", c.FilePath)
+					if c.Language != "" {
+						header += fmt.Sprintf(" [%s]", c.Language)
+					}
+					if len(c.SymbolNames) > 0 {
+						limit := 5
+						if len(c.SymbolNames) < limit {
+							limit = len(c.SymbolNames)
+						}
+						header += fmt.Sprintf(" — contains: %s", strings.Join(c.SymbolNames[:limit], ", "))
+					}
+					header += fmt.Sprintf(" (relevance: %.2f)", c.Score)
+					sb.WriteString(header + "\n```\n" + c.Content + "\n```\n\n")
 				}
 				codeContext = sb.String()
 			}

@@ -652,8 +652,11 @@ func (c *Client) indexRepoBackground(projectID, repoID, repoDir string) {
 				ID:      fmt.Sprintf("%s_%d", repoID, i+j),
 				Content: chunk.Content,
 				Metadata: map[string]string{
-					"repo_id":   repoID,
-					"file_path": chunk.FilePath,
+					"repo_id":    repoID,
+					"file_path":  chunk.FilePath,
+					"language":   chunk.Language,
+					"chunk_type": chunk.ChunkType,
+					"symbols":    strings.Join(chunk.SymbolNames, ","),
 				},
 			}
 		}
@@ -747,13 +750,13 @@ func (c *Client) DeleteRepoIndex(ctx context.Context, projectID, repoID string) 
 
 // RetrieveCode retrieves the top-K most relevant code chunks across the given repos.
 // If repoIDs is empty, all indexed repos for the project are searched.
+// Uses two-tier hybrid retrieval: file-level summaries guide file relevance,
+// then content chunks are retrieved and reranked combining both signals.
 func (c *Client) RetrieveCode(ctx context.Context, projectID string, repoIDs []string, query string, topK int) ([]CodeChunk, error) {
-	fmt.Println("RetrieveCode for repos:", repoIDs)
 	if topK <= 0 {
 		topK = 20
 	}
 
-	// Determine which repos to search
 	searchRepoIDs := repoIDs
 	if len(searchRepoIDs) == 0 {
 		searchRepoIDs = c.indexedRepoIDs(projectID)
@@ -775,32 +778,80 @@ func (c *Client) RetrieveCode(ctx context.Context, projectID string, repoIDs []s
 			continue
 		}
 
-		results, err := col.Query(ctx, query, perRepo, nil, nil)
+		chunks, err := c.retrieveFromCollection(ctx, col, query, perRepo)
 		if err != nil {
 			continue
 		}
-
-		for _, r := range results {
-			cc := CodeChunk{
-				Content: r.Content,
-				Score:   float64(r.Similarity),
-			}
-			if r.Metadata != nil {
-				cc.FilePath = r.Metadata["file_path"]
-			}
-			allResults = append(allResults, cc)
-		}
+		allResults = append(allResults, chunks...)
 	}
 
-	fmt.Println("All results:", allResults)
-
-	// Sort by score descending and limit to topK
 	sortCodeChunks(allResults)
 	if len(allResults) > topK {
 		allResults = allResults[:topK]
 	}
 
 	return allResults, nil
+}
+
+// retrieveFromCollection implements two-tier hybrid retrieval for a single collection.
+//
+// Stage 1 scores files using file_summary chunks (Metadata-Aware pre-filter).
+// Stage 2 retrieves content chunks and boosts those from high-scoring files.
+// final_score = chunk_score×0.7 + file_score×0.3
+//
+// Falls back to flat vector search for old indexes without chunk_type metadata.
+func (c *Client) retrieveFromCollection(ctx context.Context, col *chromem.Collection, query string, topK int) ([]CodeChunk, error) {
+	// Stage 1: file-level relevance via summary chunks.
+	fileScores := map[string]float64{}
+	if summaries, err := col.Query(ctx, query, 15, map[string]string{"chunk_type": "file_summary"}, nil); err == nil {
+		for _, s := range summaries {
+			if s.Metadata != nil {
+				fileScores[s.Metadata["file_path"]] = float64(s.Similarity)
+			}
+		}
+	}
+
+	// Stage 2: retrieve content chunks with a wider pool for reranking.
+	var results []chromem.Result
+	var err error
+	if len(fileScores) > 0 {
+		// New index: only content chunks (exclude file_summary from AI context).
+		results, err = col.Query(ctx, query, topK*2, map[string]string{"chunk_type": "content"}, nil)
+	}
+	if len(results) == 0 {
+		// Fallback for old indexes that lack chunk_type metadata.
+		results, err = col.Query(ctx, query, topK*2, nil, nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Build chunks and apply file-score boost (reranking).
+	chunks := make([]CodeChunk, 0, len(results))
+	for _, r := range results {
+		cc := CodeChunk{
+			Content: r.Content,
+			Score:   float64(r.Similarity),
+		}
+		if r.Metadata != nil {
+			cc.FilePath = r.Metadata["file_path"]
+			cc.Language = r.Metadata["language"]
+			cc.ChunkType = r.Metadata["chunk_type"]
+			if syms := r.Metadata["symbols"]; syms != "" {
+				cc.SymbolNames = strings.Split(syms, ",")
+			}
+		}
+		if fileScore, ok := fileScores[cc.FilePath]; ok {
+			cc.Score = cc.Score*0.7 + fileScore*0.3
+		}
+		chunks = append(chunks, cc)
+	}
+
+	sortCodeChunks(chunks)
+	if len(chunks) > topK {
+		chunks = chunks[:topK]
+	}
+	return chunks, nil
 }
 
 // GetRepoIndexStatus returns the indexing status for a specific repo.

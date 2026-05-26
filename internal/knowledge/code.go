@@ -11,9 +11,12 @@ import (
 
 // CodeChunk represents a chunk of source code with file metadata.
 type CodeChunk struct {
-	Content  string  `json:"content"`
-	FilePath string  `json:"filePath"`
-	Score    float64 `json:"score,omitempty"`
+	Content     string   `json:"content"`
+	FilePath    string   `json:"filePath"`
+	Score       float64  `json:"score,omitempty"`
+	Language    string   `json:"language,omitempty"`
+	SymbolNames []string `json:"symbolNames,omitempty"`
+	ChunkType   string   `json:"chunkType,omitempty"` // "content" | "file_summary"
 }
 
 // codeChunkSize and overlap tuned for source code.
@@ -53,6 +56,24 @@ var skipCodeDirs = map[string]bool{
 
 // maxFileSize limits individual files to 512KB to avoid embedding huge generated files.
 const maxFileSize = 512 * 1024
+
+// extToLang maps file extension to a human-readable language name stored as chunk metadata.
+var extToLang = map[string]string{
+	".go": "Go", ".js": "JavaScript", ".ts": "TypeScript",
+	".jsx": "JSX", ".tsx": "TSX", ".py": "Python",
+	".java": "Java", ".kt": "Kotlin", ".kts": "Kotlin",
+	".rb": "Ruby", ".rs": "Rust", ".c": "C", ".cpp": "C++",
+	".h": "C", ".hpp": "C++", ".cs": "C#", ".swift": "Swift",
+	".scala": "Scala", ".php": "PHP", ".vue": "Vue", ".svelte": "Svelte",
+	".sql": "SQL", ".graphql": "GraphQL", ".gql": "GraphQL",
+	".yaml": "YAML", ".yml": "YAML", ".toml": "TOML",
+	".sh": "Shell", ".bash": "Shell", ".zsh": "Shell",
+	".md": "Markdown", ".markdown": "Markdown",
+	".json": "JSON", ".proto": "Protobuf",
+	".dart": "Dart", ".ex": "Elixir", ".exs": "Elixir",
+	".lua": "Lua", ".r": "R", ".R": "R",
+	".tf": "Terraform", ".hcl": "HCL", ".dockerfile": "Dockerfile",
+}
 
 // WalkAndChunkRepo walks a repo directory and returns code chunks with metadata.
 func WalkAndChunkRepo(repoDir string, onProgress func(filePath string)) ([]CodeChunk, error) {
@@ -94,7 +115,23 @@ func WalkAndChunkRepo(repoDir string, onProgress func(filePath string)) ([]CodeC
 			onProgress(relPath)
 		}
 
-		chunks := chunkCodeFile(string(data), relPath, ext)
+		lang := extToLang[ext]
+		chunks := chunkCodeFile(string(data), relPath, ext, lang)
+
+		// Generate a file-level summary chunk for hierarchical (two-tier) retrieval.
+		allSyms := extractSymbols(string(data), ext)
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "File: %s [%s]\n", relPath, lang)
+		if len(allSyms) > 0 {
+			fmt.Fprintf(&sb, "Defines: %s\n", strings.Join(allSyms, ", "))
+		}
+		allChunks = append(allChunks, CodeChunk{
+			Content:     sb.String(),
+			FilePath:    relPath,
+			Language:    lang,
+			SymbolNames: allSyms,
+			ChunkType:   "file_summary",
+		})
 		allChunks = append(allChunks, chunks...)
 		return nil
 	})
@@ -104,7 +141,7 @@ func WalkAndChunkRepo(repoDir string, onProgress func(filePath string)) ([]CodeC
 
 // chunkCodeFile splits a single source file into chunks using langchaingo's
 // RecursiveCharacter splitter with language-aware separators.
-func chunkCodeFile(content, filePath, ext string) []CodeChunk {
+func chunkCodeFile(content, filePath, ext, language string) []CodeChunk {
 	if strings.TrimSpace(content) == "" {
 		return nil
 	}
@@ -114,8 +151,10 @@ func chunkCodeFile(content, filePath, ext string) []CodeChunk {
 	// For small files, use a single chunk
 	if len(content) <= codeChunkSize {
 		return []CodeChunk{{
-			Content:  header + content,
-			FilePath: filePath,
+			Content:   header + content,
+			FilePath:  filePath,
+			Language:  language,
+			ChunkType: "content",
 		}}
 	}
 
@@ -128,18 +167,22 @@ func chunkCodeFile(content, filePath, ext string) []CodeChunk {
 
 	parts, err := splitter.SplitText(content)
 	if err != nil || len(parts) == 0 {
-		// Fallback: single chunk (truncated)
+		// Fallback: single chunk
 		return []CodeChunk{{
-			Content:  header + content,
-			FilePath: filePath,
+			Content:   header + content,
+			FilePath:  filePath,
+			Language:  language,
+			ChunkType: "content",
 		}}
 	}
 
 	chunks := make([]CodeChunk, 0, len(parts))
 	for _, part := range parts {
 		chunks = append(chunks, CodeChunk{
-			Content:  header + part,
-			FilePath: filePath,
+			Content:   header + part,
+			FilePath:  filePath,
+			Language:  language,
+			ChunkType: "content",
 		})
 	}
 	return chunks
@@ -255,4 +298,125 @@ func separatorsForExt(ext string) []string {
 		// Generic fallback
 		return []string{"\n\n", "\n", " ", ""}
 	}
+}
+
+// extractSymbols extracts top-level symbol names (functions, types, classes) from source
+// code using simple line-by-line scanning — no external parser required.
+func extractSymbols(content, ext string) []string {
+	var symbols []string
+	seen := map[string]bool{}
+
+	for _, rawLine := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(rawLine)
+		var name string
+
+		switch ext {
+		case ".go":
+			if strings.HasPrefix(line, "func ") {
+				rest := line[5:]
+				if strings.HasPrefix(rest, "(") {
+					// method: skip receiver, take name after closing paren
+					if end := strings.Index(rest, ")"); end >= 0 {
+						name = symbolFirstWord(strings.TrimSpace(rest[end+1:]))
+					}
+				} else {
+					name = symbolFirstWord(rest)
+				}
+			} else if strings.HasPrefix(line, "type ") {
+				name = symbolFirstWord(line[5:])
+			}
+		case ".py":
+			for _, pref := range []string{"async def ", "def "} {
+				if strings.HasPrefix(line, pref) {
+					name = symbolFirstWord(line[len(pref):])
+					break
+				}
+			}
+			if name == "" && strings.HasPrefix(line, "class ") {
+				name = symbolFirstWord(line[6:])
+			}
+		case ".js", ".ts", ".jsx", ".tsx":
+			for _, pref := range []string{"export async function ", "export function ", "async function ", "function "} {
+				if strings.HasPrefix(line, pref) {
+					name = symbolFirstWord(line[len(pref):])
+					break
+				}
+			}
+			if name == "" {
+				for _, pref := range []string{"export default class ", "export abstract class ", "export class ", "class "} {
+					if strings.HasPrefix(line, pref) {
+						name = symbolFirstWord(line[len(pref):])
+						break
+					}
+				}
+			}
+		case ".rs":
+			for _, pref := range []string{"pub async fn ", "pub fn ", "async fn ", "fn "} {
+				if strings.HasPrefix(line, pref) {
+					name = symbolFirstWord(line[len(pref):])
+					break
+				}
+			}
+			if name == "" {
+				for _, pref := range []string{"pub struct ", "pub enum ", "pub trait ", "struct ", "enum ", "trait "} {
+					if strings.HasPrefix(line, pref) {
+						name = symbolFirstWord(line[len(pref):])
+						break
+					}
+				}
+			}
+		case ".rb":
+			if strings.HasPrefix(line, "def ") {
+				name = symbolFirstWord(line[4:])
+			} else if strings.HasPrefix(line, "class ") || strings.HasPrefix(line, "module ") {
+				name = symbolFirstWord(line[strings.Index(line, " ")+1:])
+			}
+		case ".java", ".kt", ".kts":
+			for _, kw := range []string{" class ", " interface ", " enum ", " object "} {
+				if idx := strings.Index(line, kw); idx >= 0 {
+					name = symbolFirstWord(line[idx+len(kw):])
+					break
+				}
+			}
+		}
+
+		// Strip any trailing punctuation that may have been included.
+		name = strings.TrimRight(name, "(<{:")
+		name = strings.TrimSpace(name)
+		if isSymbolValid(name) && !seen[name] {
+			seen[name] = true
+			symbols = append(symbols, name)
+		}
+	}
+	return symbols
+}
+
+// symbolFirstWord returns the first identifier-like token from s.
+func symbolFirstWord(s string) string {
+	s = strings.TrimSpace(s)
+	for i, c := range s {
+		if c == ' ' || c == '\t' || c == '(' || c == '<' || c == '{' || c == ':' || c == ',' {
+			return s[:i]
+		}
+	}
+	return s
+}
+
+// isSymbolValid returns true if name looks like a plausible identifier.
+func isSymbolValid(name string) bool {
+	if len(name) == 0 || len(name) > 60 {
+		return false
+	}
+	for i, c := range name {
+		if i == 0 {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_') {
+				return false
+			}
+		} else {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+				return false
+			}
+		}
+	}
+	return true
 }
