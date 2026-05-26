@@ -1,6 +1,7 @@
 import type {
   Config,
   AuthStatus,
+  ClarifyIssue,
   ClarifyResponse,
   ToolEvent,
   FeatureManifest,
@@ -85,11 +86,76 @@ export const api = {
     wikiContent?: string;
     projectId?: string;
     repoIds?: string[];
+    model?: string;
   }) =>
     request<ClarifyResponse>(`${SPEC_CLARIFY}/clarify`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  clarifyStream: async (
+    payload: {
+      spec: string;
+      mode: string;
+      projectId?: string;
+      repoIds?: string[];
+      model?: string;
+    },
+    callbacks: {
+      onStart?: (totalFiles: number) => void;
+      onScanning?: (file: string, language: string, index: number, total: number) => void;
+      onIssues?: (file: string, issues: ClarifyIssue[]) => void;
+      onDone?: (totalIssues: number, sessionId?: string) => void;
+    },
+  ): Promise<void> => {
+    const res = await fetch(`${BASE}${SPEC_CLARIFY}/clarify-stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      let boundary: number;
+      while ((boundary = buf.indexOf("\n\n")) !== -1) {
+        const block = buf.slice(0, boundary);
+        buf = buf.slice(boundary + 2);
+
+        let eventType = "";
+        let dataLine = "";
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event:")) eventType = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLine = line.slice(5).trim();
+        }
+        if (!dataLine || !eventType) continue;
+
+        const data = JSON.parse(dataLine);
+        switch (eventType) {
+          case "start":
+            callbacks.onStart?.(data.totalFiles);
+            break;
+          case "scanning":
+            callbacks.onScanning?.(data.file, data.language ?? "", data.index, data.total);
+            break;
+          case "issues":
+            callbacks.onIssues?.(data.file, data.issues ?? []);
+            break;
+          case "done":
+            callbacks.onDone?.(data.totalIssues, data.sessionId ?? undefined);
+            break;
+          case "error":
+            throw new Error(data.error);
+        }
+      }
+    }
+  },
   clarifyChat: async (
     payload: {
       sessionId: string;

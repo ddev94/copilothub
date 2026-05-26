@@ -740,6 +740,8 @@ func (c *Client) indexRepoBackground(projectID, repoID, repoDir string) {
 					"language":   chunk.Language,
 					"chunk_type": chunk.ChunkType,
 					"symbols":    strings.Join(chunk.SymbolNames, ","),
+					"start_line": fmt.Sprintf("%d", chunk.StartLine),
+					"end_line":   fmt.Sprintf("%d", chunk.EndLine),
 				},
 			}
 		}
@@ -923,6 +925,8 @@ func (c *Client) retrieveFromCollection(ctx context.Context, col *chromem.Collec
 			if syms := r.Metadata["symbols"]; syms != "" {
 				cc.SymbolNames = strings.Split(syms, ",")
 			}
+			cc.StartLine = atoiSafe(r.Metadata["start_line"])
+			cc.EndLine = atoiSafe(r.Metadata["end_line"])
 		}
 		if fileScore, ok := fileScores[cc.FilePath]; ok {
 			cc.Score = cc.Score*0.7 + fileScore*0.3
@@ -1001,6 +1005,17 @@ func (c *Client) HasRepoIndex(projectID, repoID string) bool {
 		}
 	}
 	return false
+}
+
+func atoiSafe(s string) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 
 // sortCodeChunks sorts by score descending.

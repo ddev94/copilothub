@@ -8,7 +8,7 @@ import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { ClarifyResponse } from "@/types";
+import type { ClarifyIssue, ClarifyResponse } from "@/types";
 import { marked } from "marked";
 
 function renderMd(text: string): string {
@@ -75,6 +75,11 @@ const loading = ref(false);
 const error = ref("");
 const result = ref<ClarifyResponse | null>(null);
 
+// Streaming state (source / both mode)
+const isStreaming = ref(false);
+const streamedIssues = ref<ClarifyIssue[]>([]);
+const scanProgress = ref<{ file: string; language: string; index: number; total: number } | null>(null);
+
 // ── Chat state ───────────────────────────────────────────────────────
 const sessionId = ref<string | null>(null);
 type ChatMessage = { role: "user" | "assistant"; content: string };
@@ -122,7 +127,10 @@ const canRun = computed(() => {
   return true;
 });
 
-const totalIssues = computed(() => result.value?.issues.length ?? 0);
+const displayIssues = computed<ClarifyIssue[]>(() =>
+  result.value ? result.value.issues : streamedIssues.value,
+);
+const totalIssues = computed(() => displayIssues.value.length);
 
 // ── Actions ──────────────────────────────────────────────────────────
 async function runClarify() {
@@ -134,39 +142,66 @@ async function runClarify() {
   sessionId.value = null;
   chatMessages.value = [];
   chatError.value = "";
+  streamedIssues.value = [];
+  scanProgress.value = null;
+
   try {
-    let wikiContent: string | undefined;
-    if (needsWiki.value) {
+    if (clarifyMode.value === "wiki") {
+      // Wiki mode: non-streaming
       const wikiRes = await api.wiki.chat({
         projectId: projectId.value ?? "",
         sectionKey: "spec-clarify",
         question: specText.value.trim(),
         history: [],
       });
-      wikiContent = wikiRes.answer;
+      let wikiContent = wikiRes.answer;
       if (wikiRes.chunks?.length) {
         wikiContent += "\n\n--- Nguồn tham khảo ---\n";
         for (const chunk of wikiRes.chunks) {
           wikiContent += `\n[${chunk.sourceFile || "unknown"}]:\n${chunk.content}\n`;
         }
       }
-    }
-    const payload = {
-      spec: specText.value,
-      mode: clarifyMode.value,
-      wikiContent,
-      projectId: projectId.value,
-      repoIds: effectiveRepoIds.value,
-      model: selectedModel.value || undefined,
-    };
-    result.value = await api.clarify(payload);
-    if (result.value?.sessionId) {
-      sessionId.value = result.value.sessionId;
+      result.value = await api.clarify({
+        spec: specText.value,
+        mode: clarifyMode.value,
+        wikiContent,
+        projectId: projectId.value,
+        repoIds: effectiveRepoIds.value,
+        model: selectedModel.value || undefined,
+      });
+      if (result.value?.sessionId) sessionId.value = result.value.sessionId;
+    } else {
+      // Source / both mode: per-file streaming
+      isStreaming.value = true;
+      await api.clarifyStream(
+        {
+          spec: specText.value,
+          mode: clarifyMode.value,
+          projectId: projectId.value,
+          repoIds: effectiveRepoIds.value,
+          model: selectedModel.value || undefined,
+        },
+        {
+          onScanning: (file, language, index, total) => {
+            scanProgress.value = { file, language, index, total };
+          },
+          onIssues: (_file, issues) => {
+            streamedIssues.value.push(...issues);
+          },
+          onDone: (_total, sid) => {
+            isStreaming.value = false;
+            scanProgress.value = null;
+            if (sid) sessionId.value = sid;
+          },
+        },
+      );
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Review thất bại";
   } finally {
     loading.value = false;
+    isStreaming.value = false;
+    scanProgress.value = null;
   }
 }
 
@@ -176,6 +211,9 @@ function clearResults() {
   sessionId.value = null;
   chatMessages.value = [];
   chatError.value = "";
+  streamedIssues.value = [];
+  scanProgress.value = null;
+  isStreaming.value = false;
 }
 
 // ── UI helpers ───────────────────────────────────────────────────────
@@ -477,10 +515,20 @@ function categoryLabel(category: string) {
       <div
         class="px-5 py-3 border-b border-border flex items-center justify-between shrink-0"
       >
-        <p class="text-sm font-semibold">Kết quả review</p>
-        <div v-if="result" class="flex items-center gap-1.5">
+        <div class="flex items-center gap-2 min-w-0">
+          <p class="text-sm font-semibold shrink-0">Kết quả review</p>
+          <!-- Scan progress indicator -->
+          <span
+            v-if="scanProgress"
+            class="flex items-center gap-1.5 text-[10px] text-muted-foreground min-w-0 overflow-hidden"
+          >
+            <span class="w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin shrink-0" />
+            <span class="truncate">{{ scanProgress.index }}/{{ scanProgress.total }}: {{ scanProgress.file }}</span>
+          </span>
+        </div>
+        <div v-if="result || streamedIssues.length > 0" class="flex items-center gap-1.5 shrink-0">
           <Badge
-            v-if="clarifyMode === 'source'"
+            v-if="clarifyMode === 'source' || clarifyMode === 'both'"
             variant="secondary"
             class="text-[10px]"
             >Source Code</Badge
@@ -503,7 +551,7 @@ function categoryLabel(category: string) {
       <ScrollArea class="flex-1">
         <!-- Loading -->
         <div
-          v-if="loading"
+          v-if="loading && !isStreaming"
           class="flex flex-col items-center justify-center h-full min-h-[400px] gap-3 text-center px-5"
         >
           <div
@@ -522,20 +570,21 @@ function categoryLabel(category: string) {
         </div>
 
         <!-- Results -->
-        <div v-else-if="result" class="p-5 space-y-5">
-          <!-- Summary -->
+        <div v-else-if="result || streamedIssues.length > 0 || isStreaming" class="p-5 space-y-5">
+          <!-- Summary (wiki mode only) -->
           <div
+            v-if="result?.summary"
             class="bg-muted/40 rounded-lg px-4 py-3 text-sm leading-relaxed prose prose-sm max-w-none"
             v-html="renderMd(result.summary)"
           />
 
           <!-- Issues -->
-          <div v-if="result.issues.length" class="space-y-2">
+          <div v-if="displayIssues.length" class="space-y-2">
             <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               Các vấn đề ({{ totalIssues }})
             </p>
             <div
-              v-for="issue in result.issues"
+              v-for="issue in displayIssues"
               :key="issue.id"
               class="rounded-lg border p-3 space-y-2"
               :class="severityClass(issue.severity, issue.category)"
@@ -582,8 +631,14 @@ function categoryLabel(category: string) {
             </div>
           </div>
 
-          <!-- No issues found -->
-          <div v-if="!result.issues.length" class="text-center py-8">
+          <!-- Streaming: đang scan, chưa có issues -->
+          <div v-if="isStreaming && displayIssues.length === 0" class="flex items-center gap-2 text-xs text-muted-foreground py-4">
+            <span class="w-3 h-3 border border-muted-foreground border-t-transparent rounded-full animate-spin" />
+            Đang scan các file...
+          </div>
+
+          <!-- No issues found (chỉ show khi đã xong) -->
+          <div v-if="!isStreaming && displayIssues.length === 0" class="text-center py-8">
             <span class="text-4xl block mb-3">✅</span>
             <p class="text-sm font-medium">Spec rõ ràng, không phát hiện vấn đề nào!</p>
           </div>

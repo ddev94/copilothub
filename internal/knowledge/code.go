@@ -17,6 +17,8 @@ type CodeChunk struct {
 	Language    string   `json:"language,omitempty"`
 	SymbolNames []string `json:"symbolNames,omitempty"`
 	ChunkType   string   `json:"chunkType,omitempty"` // "content" | "file_summary"
+	StartLine   int      `json:"startLine,omitempty"`
+	EndLine     int      `json:"endLine,omitempty"`
 }
 
 // codeChunkSize and overlap tuned for source code.
@@ -146,6 +148,7 @@ func chunkCodeFile(content, filePath, ext, language string) []CodeChunk {
 		return nil
 	}
 
+	totalLines := strings.Count(content, "\n") + 1
 	header := fmt.Sprintf("// File: %s\n", filePath)
 
 	// For small files, use a single chunk
@@ -155,6 +158,8 @@ func chunkCodeFile(content, filePath, ext, language string) []CodeChunk {
 			FilePath:  filePath,
 			Language:  language,
 			ChunkType: "content",
+			StartLine: 1,
+			EndLine:   totalLines,
 		}}
 	}
 
@@ -167,25 +172,96 @@ func chunkCodeFile(content, filePath, ext, language string) []CodeChunk {
 
 	parts, err := splitter.SplitText(content)
 	if err != nil || len(parts) == 0 {
-		// Fallback: single chunk
 		return []CodeChunk{{
 			Content:   header + content,
 			FilePath:  filePath,
 			Language:  language,
 			ChunkType: "content",
+			StartLine: 1,
+			EndLine:   totalLines,
 		}}
 	}
 
 	chunks := make([]CodeChunk, 0, len(parts))
+	searchFrom := 0
+	zeroCount := 0
 	for _, part := range parts {
+		start, end, next := chunkLineRange(content, part, searchFrom)
+		searchFrom = next
+		if start == 0 {
+			zeroCount++
+		}
 		chunks = append(chunks, CodeChunk{
 			Content:   header + part,
 			FilePath:  filePath,
 			Language:  language,
 			ChunkType: "content",
+			StartLine: start,
+			EndLine:   end,
 		})
 	}
+	if zeroCount > 0 {
+		fmt.Printf("[index-debug] %s: %d/%d chunks failed line lookup\n", filePath, zeroCount, len(parts))
+	}
 	return chunks
+}
+
+// chunkLineRange finds the 1-based start/end line numbers of part within content,
+// searching forward from searchFrom byte offset. Returns the next search offset.
+// It tries multiple fingerprint lengths (raw, then trimmed) to handle splitter
+// whitespace normalization.
+func chunkLineRange(content, part string, searchFrom int) (startLine, endLine, nextOffset int) {
+	if len(part) == 0 || len(content) == 0 {
+		return 0, 0, searchFrom
+	}
+
+	tryFind := func(fp string, from int) int {
+		if len(fp) == 0 {
+			return -1
+		}
+		if idx := strings.Index(content[from:], fp); idx >= 0 {
+			return from + idx
+		}
+		// Fallback: search entire content (handles mis-estimated searchFrom)
+		if from > 0 {
+			if idx := strings.Index(content, fp); idx >= 0 {
+				return idx
+			}
+		}
+		return -1
+	}
+
+	found := -1
+	for _, fpLen := range []int{80, 40, 20} {
+		if fpLen > len(part) {
+			fpLen = len(part)
+		}
+		raw := part[:fpLen]
+		if idx := tryFind(raw, searchFrom); idx >= 0 {
+			found = idx
+			break
+		}
+		// Also try trimmed version (splitter may strip leading separators)
+		if trimmed := strings.TrimSpace(raw); trimmed != raw && len(trimmed) > 0 {
+			if idx := tryFind(trimmed, searchFrom); idx >= 0 {
+				found = idx
+				break
+			}
+		}
+	}
+
+	if found < 0 {
+		return 0, 0, searchFrom
+	}
+
+	startLine = strings.Count(content[:found], "\n") + 1
+	endLine = startLine + strings.Count(part, "\n")
+
+	advance := found + len(part) - codeChunkOverlap
+	if advance <= searchFrom {
+		advance = searchFrom + 1
+	}
+	return startLine, endLine, advance
 }
 
 // separatorsForExt returns language-aware separators for the RecursiveCharacter splitter.
