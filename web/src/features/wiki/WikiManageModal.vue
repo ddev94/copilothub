@@ -34,14 +34,14 @@ const uploadQueue = ref<
   Array<{
     id: number;
     file: File;
-    status: "queued" | "uploading" | "embedding" | "done" | "error";
+    status: "queued" | "uploading" | "converting" | "embedding" | "graphing" | "done" | "error";
     message?: string;
   }>
 >([]);
 
 const isProcessing = computed(() =>
   uploadQueue.value.some(
-    (i) => i.status === "uploading" || i.status === "embedding",
+    (i) => i.status === "uploading" || i.status === "converting" || i.status === "embedding" || i.status === "graphing",
   ),
 );
 
@@ -57,7 +57,7 @@ const deleting = ref(false);
 // ── Ingest progress polling (inline per-doc) ────────────────────────────────
 const ingestDocId = ref("");
 const ingestFileName = ref("");
-const ingestState = ref<"idle" | "running" | "completed" | "failed">("idle");
+const ingestState = ref<"idle" | "running" | "completed" | "failed" | "converting" | "graphing">("idle");
 const ingestMessage = ref("");
 const ingestPercent = ref(0);
 const ingestChunksDone = ref(0);
@@ -66,7 +66,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let lastRefreshedDocId = "";
 
 function isDocEmbedding(doc: KnowledgeDocument) {
-  return ingestState.value === "running" && ingestDocId.value === doc.id;
+  return (ingestState.value === "running" || ingestState.value === "converting" || ingestState.value === "graphing") && ingestDocId.value === doc.id;
 }
 
 function isDocFailed(doc: KnowledgeDocument) {
@@ -183,15 +183,22 @@ async function startUpload(files: File[], replaceDuplicates: boolean) {
 
     queueItem.status = "uploading";
     try {
-      await new Promise((r) => setTimeout(r, 300));
-      queueItem.status = "embedding";
       startPolling();
       await knowledge.uploadFiles(
         [queueItem.file],
         replaceDuplicates,
         props.projectId,
       );
-      queueItem.status = "done";
+      // After upload API returns, update status based on current ingest state
+      if (ingestState.value === "converting") {
+        queueItem.status = "converting";
+      } else if (ingestState.value === "running") {
+        queueItem.status = "embedding";
+      } else if (ingestState.value === "graphing") {
+        queueItem.status = "graphing";
+      } else {
+        queueItem.status = "done";
+      }
     } catch (e) {
       queueItem.status = "error";
       queueItem.message = e instanceof Error ? e.message : "Upload failed";
@@ -262,7 +269,7 @@ watch(
         ingestFileName.value = p.fileName ?? "";
         ingestChunksDone.value = p.chunksDone;
         ingestChunksTotal.value = p.chunksTotal;
-        if (p.state === "running") startPolling();
+        if (p.state === "running" || p.state === "converting" || p.state === "graphing") startPolling();
       } catch {
         /* ignore */
       }
@@ -368,8 +375,12 @@ watch(
                 'border-border': item.status === 'queued',
                 'border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20':
                   item.status === 'uploading',
+                'border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20':
+                  item.status === 'converting',
                 'border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-950/20':
                   item.status === 'embedding',
+                'border-cyan-200 dark:border-cyan-800 bg-cyan-50/50 dark:bg-cyan-950/20':
+                  item.status === 'graphing',
                 'border-green-200 dark:border-green-800 bg-green-50/50 dark:bg-green-950/20':
                   item.status === 'done',
                 'border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20':
@@ -393,6 +404,15 @@ watch(
                   Uploading…
                 </span>
               </template>
+              <template v-else-if="item.status === 'converting'">
+                <span class="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+                  <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                  </svg>
+                  Converting PDF → MD…
+                </span>
+              </template>
               <template v-else-if="item.status === 'embedding'">
                 <span class="flex items-center gap-1.5 text-xs text-purple-600 dark:text-purple-400">
                   <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -400,6 +420,15 @@ watch(
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                   </svg>
                   Embedding…
+                </span>
+              </template>
+              <template v-else-if="item.status === 'graphing'">
+                <span class="flex items-center gap-1.5 text-xs text-cyan-600 dark:text-cyan-400">
+                  <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                  </svg>
+                  Building Graph…
                 </span>
               </template>
               <template v-else-if="item.status === 'done'">
@@ -475,7 +504,9 @@ watch(
                   </p>
                   <!-- Inline progress text for active doc -->
                   <p v-else class="text-[11px] text-purple-600 dark:text-purple-400 mt-0.5">
-                    Embedding… {{ ingestChunksDone }}/{{ ingestChunksTotal }} chunks
+                    <template v-if="ingestState === 'converting'">Converting PDF → MD…</template>
+                    <template v-else-if="ingestState === 'graphing'">Building Knowledge Graph…</template>
+                    <template v-else>Embedding… {{ ingestChunksDone }}/{{ ingestChunksTotal }} chunks</template>
                   </p>
                 </div>
 

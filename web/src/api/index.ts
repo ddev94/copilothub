@@ -163,7 +163,7 @@ export const api = {
       request<{ projects: LocalProject[] }>("/features/wiki/projects"),
     ingestProgress: () =>
       request<{
-        state: "idle" | "running" | "completed" | "failed";
+        state: "idle" | "running" | "completed" | "failed" | "converting" | "graphing";
         docId?: string;
         fileName?: string;
         message: string;

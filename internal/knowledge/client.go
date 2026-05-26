@@ -36,6 +36,10 @@ type ingestJob struct {
 	docID     string
 	fileName  string
 	chunks    []string
+	// Pipeline fields for PDF refinery integration
+	filePath   string                                                      // original file path (used when refineFn is set)
+	refineFn   func(ctx context.Context, filePath, fileName string) string // optional PDF→MD converter
+	sourceType string
 }
 
 type metaStore struct {
@@ -245,12 +249,123 @@ func (c *Client) IngestAsync(ctx context.Context, projectID, filePath, fileName,
 	return docID, nil
 }
 
+// IngestPipelineAsync enqueues a full pipeline job: optional PDF→MD conversion, then chunking, embedding, and graph.
+// The refineFn (if non-nil) will be called in the background worker to convert PDF text to structured markdown.
+// Returns docID immediately.
+func (c *Client) IngestPipelineAsync(ctx context.Context, projectID, filePath, fileName, sourceType string, refineFn func(ctx context.Context, filePath, fileName string) string) (string, error) {
+	docID := uuid.New().String()
+
+	// Save metadata immediately so the document appears in the list
+	c.meta.mu.Lock()
+	c.meta.docs = append(c.meta.docs, metaEntry{
+		ProjectID:  projectID,
+		DocID:      docID,
+		Name:       fileName,
+		SourceFile: fileName,
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+		Status:     "approved",
+		Verified:   true,
+		Confidence: 0.8,
+		SourceType: sourceType,
+	})
+	c.meta.mu.Unlock()
+	_ = c.meta.save()
+
+	// Enqueue pipeline job — worker will handle refine + chunk + embed
+	c.queue <- ingestJob{
+		projectID:  projectID,
+		docID:      docID,
+		fileName:   fileName,
+		filePath:   filePath,
+		refineFn:   refineFn,
+		sourceType: sourceType,
+	}
+
+	return docID, nil
+}
+
 // ingestWorker processes enqueued embedding jobs one at a time to avoid
 // concurrent map access in chromem-go.
 func (c *Client) ingestWorker() {
 	for job := range c.queue {
-		c.ingestBackground(job.projectID, job.docID, job.fileName, job.chunks)
+		if job.refineFn != nil {
+			// Full pipeline job: refine → chunk → embed → graph
+			c.ingestPipelineBackground(job)
+		} else {
+			// Legacy: chunks already prepared
+			c.ingestBackground(job.projectID, job.docID, job.fileName, job.chunks)
+		}
 	}
+}
+
+// ingestPipelineBackground handles the full pipeline: PDF→MD conversion, chunking, embedding, and graph.
+func (c *Client) ingestPipelineBackground(job ingestJob) {
+	ctx := context.Background()
+
+	// Step 1: Convert PDF → MD (if refineFn is provided)
+	IngestProgressTracker.Set(IngestProgress{
+		State:    IngestConverting,
+		DocID:    job.docID,
+		FileName: job.fileName,
+		Message:  "Đang chuyển đổi PDF sang Markdown...",
+	})
+
+	ingestPath := job.filePath
+	ingestName := job.fileName
+	if job.refineFn != nil {
+		refined := job.refineFn(ctx, job.filePath, job.fileName)
+		if refined != "" {
+			refinedPath := job.filePath + ".refined.md"
+			if err := os.WriteFile(refinedPath, []byte(refined), 0644); err == nil {
+				ingestPath = refinedPath
+				ingestName = job.fileName + ".refined.md"
+				// Update metadata to point to the refined file for content reading
+				c.updateSourceFile(job.projectID, job.docID, ingestName)
+			}
+		}
+	}
+
+	// Step 2: Extract text and chunk
+	text, err := extractText(ingestPath, ingestName)
+	if err != nil {
+		IngestProgressTracker.Set(IngestProgress{
+			State:   IngestFailed,
+			DocID:   job.docID,
+			Message: fmt.Sprintf("Text extraction failed: %v", err),
+		})
+		return
+	}
+	if strings.TrimSpace(text) == "" {
+		IngestProgressTracker.Set(IngestProgress{
+			State:   IngestFailed,
+			DocID:   job.docID,
+			Message: "No text extracted from file",
+		})
+		return
+	}
+
+	var chunks []string
+	if ext := strings.ToLower(filepath.Ext(ingestName)); ext == ".md" || ext == ".markdown" {
+		chunks = splitMarkdown(text, defaultChunkSize, defaultChunkOverlap)
+	} else {
+		chunks = splitText(text, defaultChunkSize, defaultChunkOverlap)
+	}
+	if len(chunks) == 0 {
+		IngestProgressTracker.Set(IngestProgress{
+			State:   IngestFailed,
+			DocID:   job.docID,
+			Message: "Document produced no chunks",
+		})
+		return
+	}
+
+	chunks = enrichChunksWithContext(chunks, ContextualChunkOpts{
+		FileName: job.fileName,
+		Summary:  generateDocSummary(text),
+	})
+
+	// Step 3: Embedding (delegates to existing logic)
+	c.ingestBackground(job.projectID, job.docID, job.fileName, chunks)
 }
 
 // ingestBackground embeds chunks in batches and broadcasts progress.
@@ -326,21 +441,24 @@ func (c *Client) ingestBackground(projectID, docID, fileName string, chunks []st
 	_ = c.persist()
 	c.mu.Unlock()
 
-	IngestProgressTracker.Set(IngestProgress{
-		State:       IngestCompleted,
-		DocID:       docID,
-		FileName:    fileName,
-		Message:     fmt.Sprintf("Done! %d chunks embedded", total),
-		ChunksDone:  total,
-		ChunksTotal: total,
-		Percent:     100,
-	})
-
 	go func(pid string) {
+		IngestProgressTracker.Set(IngestProgress{
+			State:    IngestGraphing,
+			DocID:    docID,
+			FileName: fileName,
+			Message:  "Đang xây dựng Knowledge Graph...",
+		})
+
 		rebuildCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		if err := c.RebuildGraphForProject(rebuildCtx, pid); err != nil {
 			fmt.Printf("[knowledge/graph] rebuild failed project=%s err=%v\n", pid, err)
+			IngestProgressTracker.Set(IngestProgress{
+				State:    IngestCompleted,
+				DocID:    docID,
+				FileName: fileName,
+				Message:  "Embedding hoàn tất (graph rebuild failed)",
+			})
 			return
 		}
 		nodes, edges, revision, err := c.GraphStats()
@@ -349,6 +467,13 @@ func (c *Client) ingestBackground(projectID, docID, fileName string, chunks []st
 			return
 		}
 		fmt.Printf("[knowledge/graph] rebuilt project=%s nodes=%d edges=%d revision=%d\n", pid, nodes, edges, revision)
+
+		IngestProgressTracker.Set(IngestProgress{
+			State:    IngestCompleted,
+			DocID:    docID,
+			FileName: fileName,
+			Message:  fmt.Sprintf("Hoàn tất! %d chunks, %d nodes, %d edges", total, nodes, edges),
+		})
 	}(projectID)
 }
 
@@ -407,6 +532,19 @@ func (c *Client) DeleteDocument(ctx context.Context, projectID, docID string) er
 	return c.meta.save()
 }
 
+// updateSourceFile updates the SourceFile field in metadata for a given document.
+func (c *Client) updateSourceFile(projectID, docID, newSourceFile string) {
+	c.meta.mu.Lock()
+	for i := range c.meta.docs {
+		if c.meta.docs[i].ProjectID == projectID && c.meta.docs[i].DocID == docID {
+			c.meta.docs[i].SourceFile = newSourceFile
+			break
+		}
+	}
+	c.meta.mu.Unlock()
+	_ = c.meta.save()
+}
+
 // Retrieve returns the topK most semantically similar chunks for query.
 func (c *Client) Retrieve(ctx context.Context, projectID, query string, topK int) ([]Chunk, error) {
 	col, err := c.collection(ctx, projectID)
@@ -447,6 +585,10 @@ func (c *Client) SyncOrphanFiles(projectID, filesDir string) int {
 			continue
 		}
 		name := entry.Name()
+		// Skip refined markdown files — they are byproducts of PDF processing
+		if strings.HasSuffix(name, ".refined.md") {
+			continue
+		}
 		ext := strings.ToLower(filepath.Ext(name))
 		if ext != ".pdf" && ext != ".md" && ext != ".docx" {
 			continue

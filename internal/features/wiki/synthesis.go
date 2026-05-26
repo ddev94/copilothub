@@ -136,7 +136,9 @@ FORMAT cho câu hỏi quy trình/flow/step:
 3. Mỗi bước mô tả ngắn gọn nội dung chính + [source: file].
 4. Nếu evidence đề cập đến step numbers (Step 1, Step 2...) → liệt kê HẾT các step tìm thấy, kể cả khi mô tả ngắn.
 5. Nếu chỉ tìm thấy một phần flow → nêu rõ "Có thể còn bước khác chưa có trong dữ liệu hiện tại".
-6. KHÔNG bỏ qua step nào có trong evidence chỉ vì mô tả ngắn.`,
+6. KHÔNG bỏ qua step nào có trong evidence chỉ vì mô tả ngắn.
+7. Nếu evidence ghi "Có N bước" và bạn thấy đủ N bước trong evidence → BẮT BUỘC liệt kê TẤT CẢ N bước với đầy đủ chi tiết.
+8. KHÔNG ĐƯỢC nói "chỉ có Bước 1" nếu evidence thực sự chứa nội dung các bước khác — hãy đọc KỸ toàn bộ evidence.`,
 
 		"compare": `
 FORMAT cho câu hỏi so sánh:

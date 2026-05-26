@@ -329,24 +329,25 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		dst.Close()
 		file.Close()
 
-		// PDF Refinery: use AI to convert raw PDF text to structured markdown
+		// For PDFs: use the full pipeline (async refine → chunk → embed → graph)
+		// For other files: use standard ingest (chunk → embed → graph)
 		ingestPath := destPath
 		ingestName := header.Filename
 		if ext == ".pdf" {
-			if refined := h.refinePDF(r.Context(), destPath, header.Filename); refined != "" {
-				refinedPath := destPath + ".refined.md"
-				if err := os.WriteFile(refinedPath, []byte(refined), 0644); err == nil {
-					ingestPath = refinedPath
-					ingestName = header.Filename + ".refined.md"
-				}
+			refineFn := func(ctx context.Context, filePath, fileName string) string {
+				return h.refinePDF(ctx, filePath, fileName)
+			}
+			if _, err := c.IngestPipelineAsync(r.Context(), pid, destPath, header.Filename, contentType, refineFn); err != nil {
+				results = append(results, uploadResult{File: header.Filename, OK: false, Message: "knowledge ingest failed: " + err.Error()})
+				continue
+			}
+		} else {
+			if _, err := c.IngestAsync(r.Context(), pid, ingestPath, ingestName, contentType); err != nil {
+				results = append(results, uploadResult{File: header.Filename, OK: false, Message: "knowledge ingest failed: " + err.Error()})
+				continue
 			}
 		}
-
-		if _, err := c.IngestAsync(r.Context(), pid, ingestPath, ingestName, contentType); err != nil {
-			results = append(results, uploadResult{File: header.Filename, OK: false, Message: "knowledge ingest failed: " + err.Error()})
-			continue
-		}
-		results = append(results, uploadResult{File: header.Filename, OK: true, Message: "embedding in background"})
+		results = append(results, uploadResult{File: header.Filename, OK: true, Message: "processing in background"})
 	}
 
 	writeJSON(w, map[string]any{"results": results})
@@ -392,10 +393,21 @@ func (h *Handler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Remove the physical source file from disk
+	// Remove the physical source file and any associated refined file from disk
 	if sourceFile != "" {
-		diskPath := filepath.Join(h.projectFilesDir(pid), sourceFile)
+		filesDir := h.projectFilesDir(pid)
+		diskPath := filepath.Join(filesDir, sourceFile)
 		_ = os.Remove(diskPath)
+
+		// Also remove refined markdown if it exists (for PDFs)
+		if strings.HasSuffix(strings.ToLower(sourceFile), ".pdf") {
+			_ = os.Remove(diskPath + ".refined.md")
+		}
+		// If sourceFile itself is a .refined.md, also remove the original PDF
+		if strings.HasSuffix(sourceFile, ".refined.md") {
+			origPDF := strings.TrimSuffix(sourceFile, ".refined.md")
+			_ = os.Remove(filepath.Join(filesDir, origPDF))
+		}
 	}
 
 	writeJSON(w, map[string]bool{"ok": true})

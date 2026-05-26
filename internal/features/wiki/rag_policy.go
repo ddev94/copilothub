@@ -23,6 +23,9 @@ type verificationResult struct {
 	Reason               string
 	HighConfidenceChunks int
 	SourceDiversity      int
+	HasGaps              bool // true when sequence steps are missing
+	ExpectedSteps        int  // total steps mentioned in evidence
+	FoundSteps           int  // steps actually found in evidence
 }
 
 type refinementPlan struct {
@@ -87,19 +90,16 @@ func (h *Handler) buildInitialPlan(queryType, intent, question string) retrieval
 // shouldUseGraphByEvidence determines if graph expansion should activate
 // based on evidence quality, not just initial intent classification.
 func shouldUseGraphByEvidence(plan retrievalPlan, verified verificationResult, iter int) bool {
+	if verified.HasGaps {
+		return true // Always use graph when sequence gaps detected
+	}
+	if verified.Sufficient {
+		return false
+	}
 	if plan.UseGraph {
 		return true
 	}
-	// If evidence is weak after first iteration, try graph
-	if iter > 1 && !verified.Sufficient {
-		return true
-	}
-	// For enumeration queries, graph helps find cross-document entities
-	if verified.HighConfidenceChunks < 2 && (plan.QueryType == "count" || plan.QueryType == "list" || plan.QueryType == "mapping") {
-		return true
-	}
-	// Low source diversity suggests we need graph to find related docs
-	if verified.SourceDiversity <= 1 && plan.QueryType != "summary" {
+	if iter >= 2 && (verified.Reason == "low_confidence_density" || verified.Reason == "avg_score_low") {
 		return true
 	}
 	return false
@@ -170,12 +170,28 @@ func (h *Handler) verifyEvidence(queryType string, chunks []knowledge.Chunk) ver
 		reason = "avg_score_low"
 	}
 
+	// Sequence gap detection for process queries
+	var hasGaps bool
+	var expectedSteps, foundSteps int
+	if queryType == "process" && sufficient {
+		expectedSteps, foundSteps = detectSequenceGaps(chunks)
+		if expectedSteps > 0 && foundSteps < expectedSteps {
+			sufficient = false
+			hasGaps = true
+			reason = "missing_sequence_steps"
+			fmt.Printf("[wiki/verify] sequence gap: expected %d steps, found %d\n", expectedSteps, foundSteps)
+		}
+	}
+
 	return verificationResult{
 		Sufficient:           sufficient,
 		CoverageScore:        avg,
 		Reason:               reason,
 		HighConfidenceChunks: highConfidence,
 		SourceDiversity:      srcDiversity,
+		HasGaps:              hasGaps,
+		ExpectedSteps:        expectedSteps,
+		FoundSteps:           foundSteps,
 	}
 }
 
@@ -204,6 +220,27 @@ func (h *Handler) refinePlanAI(ctx context.Context, question, queryType string, 
 		fmt.Fprintf(&chunkSummary, "- [score=%.2f] %s\n", currentChunks[i].Score, content)
 	}
 
+	// Build gap-aware prompt
+	var gapHint string
+	if verified.HasGaps {
+		var missingSteps []string
+		for i := 1; i <= verified.ExpectedSteps; i++ {
+			found := false
+			for j := 0; j < limit; j++ {
+				if strings.Contains(currentChunks[j].Content, fmt.Sprintf("Bước %d", i)) ||
+					strings.Contains(currentChunks[j].Content, fmt.Sprintf("Step %d", i)) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				missingSteps = append(missingSteps, fmt.Sprintf("Bước %d/Step %d", i, i))
+			}
+		}
+		gapHint = fmt.Sprintf("\n\nCRITICAL: Evidence mentions %d steps but ONLY has details for %d. MISSING: %s. Generate queries that SPECIFICALLY target these missing steps. Do NOT search for steps already found.",
+			verified.ExpectedSteps, verified.FoundSteps, strings.Join(missingSteps, ", "))
+	}
+
 	prompt := fmt.Sprintf(`Given a user question and what was already retrieved, generate 2-3 NEW search queries to find MISSING information.
 
 Question: %s
@@ -218,10 +255,10 @@ Rules:
 - Generate queries that would find DIFFERENT/MISSING information
 - For "%s" type: focus on completeness and enumeration
 - Do NOT repeat prior queries in different wording
-- Return ONLY a JSON array of strings
+- Return ONLY a JSON array of strings%s
 
 Example: ["query 1", "query 2"]`, question, queryType, verified.Reason, verified.HighConfidenceChunks, verified.CoverageScore,
-		strings.Join(priorQueries, " | "), chunkSummary.String(), queryType)
+		strings.Join(priorQueries, " | "), chunkSummary.String(), queryType, gapHint)
 
 	messages := []ai.Message{{Role: "user", Content: prompt}}
 	resp, err := aiProv.Complete(ctx, messages)
@@ -320,3 +357,54 @@ func (h *Handler) refinePlanHeuristic(question, queryType string, priorQueries [
 }
 
 func contextBackground() context.Context { return context.Background() }
+
+// detectSequenceGaps checks if evidence mentions N steps but only contains details for fewer.
+// Returns (expectedSteps, foundSteps). If expectedSteps==0, detection was inconclusive.
+func detectSequenceGaps(chunks []knowledge.Chunk) (int, int) {
+	var fullText strings.Builder
+	for _, c := range chunks {
+		fullText.WriteString(c.Content)
+		fullText.WriteString("\n")
+	}
+	text := fullText.String()
+
+	// Detect expected step count from mentions like "6 bước", "(6 BƯỚC)", "6 steps"
+	expected := 0
+	for n := 3; n <= 20; n++ {
+		patterns := []string{
+			fmt.Sprintf("%d bước", n),
+			fmt.Sprintf("%d BƯỚC", n),
+			fmt.Sprintf("%d steps", n),
+			fmt.Sprintf("%d step", n),
+		}
+		for _, p := range patterns {
+			if strings.Contains(text, p) {
+				if n > expected {
+					expected = n
+				}
+			}
+		}
+	}
+	if expected == 0 {
+		return 0, 0
+	}
+
+	// Count which steps are actually present in evidence
+	found := 0
+	for i := 1; i <= expected; i++ {
+		stepPatterns := []string{
+			fmt.Sprintf("Bước %d", i),
+			fmt.Sprintf("bước %d", i),
+			fmt.Sprintf("Step %d", i),
+			fmt.Sprintf("step %d", i),
+			fmt.Sprintf("BƯỚC %d", i),
+		}
+		for _, p := range stepPatterns {
+			if strings.Contains(text, p) {
+				found++
+				break
+			}
+		}
+	}
+	return expected, found
+}

@@ -23,10 +23,12 @@ type ModelProgress struct {
 type IngestState string
 
 const (
-	IngestIdle      IngestState = "idle"
-	IngestRunning   IngestState = "running"
-	IngestCompleted IngestState = "completed"
-	IngestFailed    IngestState = "failed"
+	IngestIdle       IngestState = "idle"
+	IngestConverting IngestState = "converting" // PDF → MD conversion
+	IngestRunning    IngestState = "running"    // Embedding chunks
+	IngestGraphing   IngestState = "graphing"   // Building knowledge graph
+	IngestCompleted  IngestState = "completed"
+	IngestFailed     IngestState = "failed"
 )
 
 type IngestProgress struct {

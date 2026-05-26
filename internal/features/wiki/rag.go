@@ -52,7 +52,25 @@ Clean Markdown:`, text)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(resp)
+	return stripCodeFences(strings.TrimSpace(resp))
+}
+
+// stripCodeFences removes wrapping ```markdown ... ``` or ``` ... ``` from AI responses.
+func stripCodeFences(s string) string {
+	s = strings.TrimSpace(s)
+	// Check for opening fence: ```markdown, ```md, or just ```
+	if strings.HasPrefix(s, "```") {
+		// Find end of first line (the opening fence line)
+		idx := strings.Index(s, "\n")
+		if idx >= 0 {
+			s = s[idx+1:]
+		}
+		// Remove closing fence
+		if strings.HasSuffix(s, "```") {
+			s = strings.TrimSuffix(s, "```")
+		}
+	}
+	return strings.TrimSpace(s)
 }
 
 // ---- Multi-Query Expansion ----
